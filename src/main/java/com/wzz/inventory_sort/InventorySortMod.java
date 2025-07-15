@@ -3,15 +3,9 @@ package com.wzz.inventory_sort;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
-import net.minecraft.client.resources.sounds.SimpleSoundInstance;
-import net.minecraft.network.chat.Component;
-import net.minecraft.sounds.SoundEvents;
-import net.minecraft.sounds.SoundSource;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.InventoryMenu;
@@ -42,8 +36,6 @@ public class InventorySortMod {
     public static final String MODID = "inventory_sort";
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    private static final int MAX_CONTAINER_SIZE = 2000;
-
     private static final int BATCH_SIZE = 100;
 
     private static final int MAX_MERGE_ITERATIONS = 200;
@@ -60,11 +52,6 @@ public class InventorySortMod {
     private static final int ARMOR_END = 39;        // 护甲槽结束
     private static final int OFFHAND_SLOT = 40;     // 副手槽
     private static final int SPACE_KEY = GLFW.GLFW_KEY_SPACE;
-    private static final int BUTTON_WIDTH = 12;
-    private static final int BUTTON_HEIGHT = 12;
-
-    private int containerButtonX = -1, containerButtonY = -1;
-    private int playerButtonX = -1, playerButtonY = -1;
 
     private enum ItemCategory {
         WEAPONS(1, "武器"),
@@ -111,84 +98,10 @@ public class InventorySortMod {
     }
 
     @SubscribeEvent
-    public void onScreenRenderPost(ScreenEvent.Render.Post event) {
-        if (event.getScreen() instanceof AbstractContainerScreen<?> containerScreen) {
-            if (containerScreen instanceof CreativeModeInventoryScreen) {
-                return;
-            }
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.player == null) return;
-            AbstractContainerMenu container = containerScreen.getMenu();
-            renderSortButtons(event.getGuiGraphics(), containerScreen, container);
-        }
-    }
-
-    private void renderSortButtons(GuiGraphics guiGraphics, AbstractContainerScreen<?> containerScreen, AbstractContainerMenu container) {
-        int leftPos = containerScreen.getGuiLeft();
-        int topPos = containerScreen.getGuiTop();
-        int imageWidth = containerScreen.getXSize();
-        int imageHeight = containerScreen.getYSize();
-        Minecraft mc = Minecraft.getInstance();
-        double mouseX = mc.mouseHandler.xpos() * mc.getWindow().getGuiScaledWidth() / mc.getWindow().getScreenWidth();
-        double mouseY = mc.mouseHandler.ypos() * mc.getWindow().getGuiScaledHeight() / mc.getWindow().getScreenHeight();
-        if (!(container instanceof InventoryMenu)) {
-            containerButtonX = leftPos + imageWidth - BUTTON_WIDTH - 2;
-            containerButtonY = topPos + 4;
-            boolean isHovered = mouseX >= containerButtonX && mouseX < containerButtonX + BUTTON_WIDTH &&
-                    mouseY >= containerButtonY && mouseY < containerButtonY + BUTTON_HEIGHT;
-            renderSortButton(guiGraphics, containerButtonX, containerButtonY, "📦", 0x4A90E2, isHovered);
-            if (isHovered) {
-                guiGraphics.renderTooltip(mc.font, Component.literal("整理容器"), (int)mouseX, (int)mouseY);
-            }
-            return;
-        } else {
-            containerButtonX = -1;
-        }
-        playerButtonX = leftPos + imageWidth - BUTTON_WIDTH - 2;
-        playerButtonY = topPos + imageHeight - 97;
-        boolean isPlayerHovered = mouseX >= playerButtonX && mouseX < playerButtonX + BUTTON_WIDTH &&
-                mouseY >= playerButtonY && mouseY < playerButtonY + BUTTON_HEIGHT;
-        renderSortButton(guiGraphics, playerButtonX, playerButtonY, "=", 0x50C878, isPlayerHovered);
-        if (isPlayerHovered) {
-            guiGraphics.renderTooltip(mc.font, Component.literal("整理背包"), (int)mouseX, (int)mouseY);
-        }
-    }
-
-    /**
-     * 渲染单个整理按钮
-     */
-    private void renderSortButton(GuiGraphics guiGraphics, int x, int y, String icon, int color, boolean isHovered) {
-        int alpha = isHovered ? 0xBB : 0x88;
-        int bgColor = (alpha << 24);
-        int buttonColor = (alpha << 24) | (color & 0xFFFFFF);
-        guiGraphics.fill(x, y, x + BUTTON_WIDTH, y + BUTTON_HEIGHT, bgColor);
-        guiGraphics.fill(x + 1, y + 1, x + BUTTON_WIDTH - 1, y + BUTTON_HEIGHT - 1, buttonColor);
-        int borderColor = isHovered ? 0xFFFFFFFF : 0xFFAAAAAA;
-        guiGraphics.fill(x, y, x + BUTTON_WIDTH, y + 1, borderColor); // 上
-        guiGraphics.fill(x, y, x + 1, y + BUTTON_HEIGHT, borderColor); // 左
-        guiGraphics.fill(x + BUTTON_WIDTH - 1, y, x + BUTTON_WIDTH, y + BUTTON_HEIGHT, 0xFF555555); // 右
-        guiGraphics.fill(x, y + BUTTON_HEIGHT - 1, x + BUTTON_WIDTH, y + BUTTON_HEIGHT, 0xFF555555); // 下
-        Minecraft mc = Minecraft.getInstance();
-        int textWidth = mc.font.width(icon);
-        int textX = x + (BUTTON_WIDTH - textWidth) / 2;
-        int textY = y + (BUTTON_HEIGHT - mc.font.lineHeight) / 2;
-        guiGraphics.drawString(mc.font, icon, textX, textY, 0xFFFFFFFF);
-        if (isHovered) {
-            guiGraphics.fill(x + 1, y + 1, x + BUTTON_WIDTH - 1, y + BUTTON_HEIGHT - 1, 0x40FFFFFF);
-        }
-    }
-
-    @SubscribeEvent
     public void onScreenMouseClick(ScreenEvent.MouseButtonPressed.Pre event) {
         if (event.getButton() == 0) {
             Minecraft mc = Minecraft.getInstance();
             if (mc.player == null || mc.screen == null || isSorting) return;
-            if (checkSortButtonClick(event.getMouseX(), event.getMouseY())) {
-                mc.getSoundManager().play(new SimpleSoundInstance(SoundEvents.UI_BUTTON_CLICK.value(), SoundSource.VOICE, 0.5f, 1f,
-                        RandomSource.create(), mc.player.blockPosition()));
-                event.setCanceled(true);
-                return;
-            }
             if (GLFW.glfwGetKey(mc.getWindow().getWindow(), SPACE_KEY) == GLFW.GLFW_PRESS) {
                 if (mc.screen instanceof AbstractContainerScreen<?> containerScreen) {
                     AbstractContainerMenu container = containerScreen.getMenu();
@@ -206,38 +119,6 @@ public class InventorySortMod {
                 }
             }
         }
-    }
-
-    /**
-     * 检查是否点击了整理按钮
-     */
-    private boolean checkSortButtonClick(double mouseX, double mouseY) {
-        if (containerButtonX != -1 && containerButtonY != -1) {
-            if (mouseX >= containerButtonX && mouseX < containerButtonX + BUTTON_WIDTH &&
-                    mouseY >= containerButtonY && mouseY < containerButtonY + BUTTON_HEIGHT) {
-                sortContainerAsync();
-                return true;
-            }
-        }
-        if (playerButtonX != -1 && playerButtonY != -1) {
-            if (mouseX >= playerButtonX && mouseX < playerButtonX + BUTTON_WIDTH &&
-                    mouseY >= playerButtonY && mouseY < playerButtonY + BUTTON_HEIGHT) {
-                sortPlayerInventoryAsync();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * 屏幕关闭时重置按钮位置
-     */
-    @SubscribeEvent
-    public void onScreenClose(ScreenEvent.Closing event) {
-        containerButtonX = -1;
-        containerButtonY = -1;
-        playerButtonX = -1;
-        playerButtonY = -1;
     }
 
     /**
@@ -477,6 +358,10 @@ public class InventorySortMod {
                 if (mc.screen instanceof InventoryScreen || container instanceof InventoryMenu) {
                     sortPlayerInventoryAsync();
                 } else {
+                    int containerSize = getContainerSize(container);
+                    if (containerSize < 10) {
+                        return;
+                    }
                     sortContainerAsync();
                 }
                 event.setCanceled(true);
