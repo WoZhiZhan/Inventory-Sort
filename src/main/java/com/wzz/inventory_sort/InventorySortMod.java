@@ -3,16 +3,21 @@ package com.wzz.inventory_sort;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.client.resources.sounds.SimpleSoundInstance;
+import net.minecraft.network.chat.Component;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.piston.PistonBaseBlock;
-import net.minecraftforge.client.event.InputEvent;
 import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.common.MinecraftForge;
@@ -54,6 +59,12 @@ public class InventorySortMod {
     private static final int ARMOR_START = 36;      // 护甲槽开始
     private static final int ARMOR_END = 39;        // 护甲槽结束
     private static final int OFFHAND_SLOT = 40;     // 副手槽
+    private static final int SPACE_KEY = GLFW.GLFW_KEY_SPACE;
+    private static final int BUTTON_WIDTH = 12;
+    private static final int BUTTON_HEIGHT = 12;
+
+    private int containerButtonX = -1, containerButtonY = -1;
+    private int playerButtonX = -1, playerButtonY = -1;
 
     private enum ItemCategory {
         WEAPONS(1, "武器"),
@@ -78,10 +89,6 @@ public class InventorySortMod {
         public int getPriority() {
             return priority;
         }
-
-        public String getDisplayName() {
-            return displayName;
-        }
     }
 
     public InventorySortMod() {
@@ -104,6 +111,363 @@ public class InventorySortMod {
     }
 
     @SubscribeEvent
+    public void onScreenRenderPost(ScreenEvent.Render.Post event) {
+        if (event.getScreen() instanceof AbstractContainerScreen<?> containerScreen) {
+            if (containerScreen instanceof CreativeModeInventoryScreen) {
+                return;
+            }
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player == null) return;
+            AbstractContainerMenu container = containerScreen.getMenu();
+            renderSortButtons(event.getGuiGraphics(), containerScreen, container);
+        }
+    }
+
+    private void renderSortButtons(GuiGraphics guiGraphics, AbstractContainerScreen<?> containerScreen, AbstractContainerMenu container) {
+        int leftPos = containerScreen.getGuiLeft();
+        int topPos = containerScreen.getGuiTop();
+        int imageWidth = containerScreen.getXSize();
+        int imageHeight = containerScreen.getYSize();
+        Minecraft mc = Minecraft.getInstance();
+        double mouseX = mc.mouseHandler.xpos() * mc.getWindow().getGuiScaledWidth() / mc.getWindow().getScreenWidth();
+        double mouseY = mc.mouseHandler.ypos() * mc.getWindow().getGuiScaledHeight() / mc.getWindow().getScreenHeight();
+        if (!(container instanceof InventoryMenu)) {
+            containerButtonX = leftPos + imageWidth - BUTTON_WIDTH - 2;
+            containerButtonY = topPos + 4;
+            boolean isHovered = mouseX >= containerButtonX && mouseX < containerButtonX + BUTTON_WIDTH &&
+                    mouseY >= containerButtonY && mouseY < containerButtonY + BUTTON_HEIGHT;
+            renderSortButton(guiGraphics, containerButtonX, containerButtonY, "📦", 0x4A90E2, isHovered);
+            if (isHovered) {
+                guiGraphics.renderTooltip(mc.font, Component.literal("整理容器"), (int)mouseX, (int)mouseY);
+            }
+            return;
+        } else {
+            containerButtonX = -1;
+        }
+        playerButtonX = leftPos + imageWidth - BUTTON_WIDTH - 2;
+        playerButtonY = topPos + imageHeight - 97;
+        boolean isPlayerHovered = mouseX >= playerButtonX && mouseX < playerButtonX + BUTTON_WIDTH &&
+                mouseY >= playerButtonY && mouseY < playerButtonY + BUTTON_HEIGHT;
+        renderSortButton(guiGraphics, playerButtonX, playerButtonY, "=", 0x50C878, isPlayerHovered);
+        if (isPlayerHovered) {
+            guiGraphics.renderTooltip(mc.font, Component.literal("整理背包"), (int)mouseX, (int)mouseY);
+        }
+    }
+
+    /**
+     * 渲染单个整理按钮
+     */
+    private void renderSortButton(GuiGraphics guiGraphics, int x, int y, String icon, int color, boolean isHovered) {
+        int alpha = isHovered ? 0xBB : 0x88;
+        int bgColor = (alpha << 24);
+        int buttonColor = (alpha << 24) | (color & 0xFFFFFF);
+        guiGraphics.fill(x, y, x + BUTTON_WIDTH, y + BUTTON_HEIGHT, bgColor);
+        guiGraphics.fill(x + 1, y + 1, x + BUTTON_WIDTH - 1, y + BUTTON_HEIGHT - 1, buttonColor);
+        int borderColor = isHovered ? 0xFFFFFFFF : 0xFFAAAAAA;
+        guiGraphics.fill(x, y, x + BUTTON_WIDTH, y + 1, borderColor); // 上
+        guiGraphics.fill(x, y, x + 1, y + BUTTON_HEIGHT, borderColor); // 左
+        guiGraphics.fill(x + BUTTON_WIDTH - 1, y, x + BUTTON_WIDTH, y + BUTTON_HEIGHT, 0xFF555555); // 右
+        guiGraphics.fill(x, y + BUTTON_HEIGHT - 1, x + BUTTON_WIDTH, y + BUTTON_HEIGHT, 0xFF555555); // 下
+        Minecraft mc = Minecraft.getInstance();
+        int textWidth = mc.font.width(icon);
+        int textX = x + (BUTTON_WIDTH - textWidth) / 2;
+        int textY = y + (BUTTON_HEIGHT - mc.font.lineHeight) / 2;
+        guiGraphics.drawString(mc.font, icon, textX, textY, 0xFFFFFFFF);
+        if (isHovered) {
+            guiGraphics.fill(x + 1, y + 1, x + BUTTON_WIDTH - 1, y + BUTTON_HEIGHT - 1, 0x40FFFFFF);
+        }
+    }
+
+    @SubscribeEvent
+    public void onScreenMouseClick(ScreenEvent.MouseButtonPressed.Pre event) {
+        if (event.getButton() == 0) {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player == null || mc.screen == null || isSorting) return;
+            if (checkSortButtonClick(event.getMouseX(), event.getMouseY())) {
+                mc.getSoundManager().play(new SimpleSoundInstance(SoundEvents.UI_BUTTON_CLICK.value(), SoundSource.VOICE, 0.5f, 1f,
+                        RandomSource.create(), mc.player.blockPosition()));
+                event.setCanceled(true);
+                return;
+            }
+            if (GLFW.glfwGetKey(mc.getWindow().getWindow(), SPACE_KEY) == GLFW.GLFW_PRESS) {
+                if (mc.screen instanceof AbstractContainerScreen<?> containerScreen) {
+                    AbstractContainerMenu container = containerScreen.getMenu();
+                    Slot hoveredSlot = getSlotUnderMouse(containerScreen);
+                    if (hoveredSlot != null && !hoveredSlot.getItem().isEmpty()) {
+                        CompletableFuture.runAsync(() -> {
+                            try {
+                                performQuickTransfer(hoveredSlot, container, mc);
+                            } catch (Exception e) {
+                                LOGGER.error("一键转移时发生错误: ", e);
+                            }
+                        });
+                        event.setCanceled(true);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 检查是否点击了整理按钮
+     */
+    private boolean checkSortButtonClick(double mouseX, double mouseY) {
+        if (containerButtonX != -1 && containerButtonY != -1) {
+            if (mouseX >= containerButtonX && mouseX < containerButtonX + BUTTON_WIDTH &&
+                    mouseY >= containerButtonY && mouseY < containerButtonY + BUTTON_HEIGHT) {
+                sortContainerAsync();
+                return true;
+            }
+        }
+        if (playerButtonX != -1 && playerButtonY != -1) {
+            if (mouseX >= playerButtonX && mouseX < playerButtonX + BUTTON_WIDTH &&
+                    mouseY >= playerButtonY && mouseY < playerButtonY + BUTTON_HEIGHT) {
+                sortPlayerInventoryAsync();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 屏幕关闭时重置按钮位置
+     */
+    @SubscribeEvent
+    public void onScreenClose(ScreenEvent.Closing event) {
+        containerButtonX = -1;
+        containerButtonY = -1;
+        playerButtonX = -1;
+        playerButtonY = -1;
+    }
+
+    /**
+     * 智能转移方法 - 根据点击的槽位类型决定转移范围
+     */
+    private boolean performQuickTransfer(Slot sourceSlot, AbstractContainerMenu container, Minecraft mc) {
+        if (mc.gameMode == null || mc.player == null) return false;
+        if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
+            return false;
+        }
+        ItemStack sourceItem = sourceSlot.getItem();
+        if (sourceItem.isEmpty()) return false;
+
+        boolean isContainerToInventory = isContainerSlot(sourceSlot, container);
+
+        try {
+            if (isContainerToInventory) {
+                return transferAllFromContainer(container, mc);
+            } else {
+                boolean isHotbarSlot = isHotbarSlot(sourceSlot, container);
+                return transferAllFromInventory(container, mc, isHotbarSlot);
+            }
+        } catch (Exception e) {
+            LOGGER.error("转移所有物品时发生错误: ", e);
+            return false;
+        }
+    }
+
+    /**
+     * 判断槽位是否是快捷栏
+     */
+    private boolean isHotbarSlot(Slot slot, AbstractContainerMenu container) {
+        if (container instanceof InventoryMenu) {
+            return slot.index >= HOTBAR_START && slot.index <= HOTBAR_END;
+        } else {
+            int totalSlots = container.slots.size();
+            int playerSlotsStart = totalSlots - 36;
+            int hotbarStart = playerSlotsStart + 27;
+            int hotbarEnd = playerSlotsStart + 35;
+            return slot.index >= hotbarStart && slot.index <= hotbarEnd;
+        }
+    }
+
+    /**
+     * 转移容器中的所有物品到背包
+     */
+    private boolean transferAllFromContainer(AbstractContainerMenu container, Minecraft mc) {
+        List<Slot> containerSlots = getContainerSlots(container);
+        return transferAllSlots(containerSlots, container, mc, "容器到背包");
+    }
+
+    /**
+     * 转移背包中的物品到容器 - 支持选择性转移
+     */
+    private boolean transferAllFromInventory(AbstractContainerMenu container, Minecraft mc, boolean onlyHotbar) {
+        List<Slot> inventorySlots = getPlayerInventorySlots(container, onlyHotbar);
+        String direction = onlyHotbar ? "快捷栏到容器" : "主背包到容器";
+        return transferAllSlots(inventorySlots, container, mc, direction);
+    }
+
+    /**
+     * 获取玩家背包槽位 - 支持选择性包含快捷栏
+     */
+    private List<Slot> getPlayerInventorySlots(AbstractContainerMenu container, boolean onlyHotbar) {
+        List<Slot> slots = new ArrayList<>();
+        if (container instanceof InventoryMenu) {
+            if (onlyHotbar) {
+                for (int i = HOTBAR_START; i <= HOTBAR_END; i++) {
+                    slots.add(container.getSlot(i));
+                }
+            } else {
+                for (int i = INVENTORY_START; i <= INVENTORY_END; i++) {
+                    slots.add(container.getSlot(i));
+                }
+            }
+        } else {
+            int totalSlots = container.slots.size();
+            int playerSlotsStart = totalSlots - 36;
+            if (onlyHotbar) {
+                for (int i = playerSlotsStart + 27; i < playerSlotsStart + 36; i++) {
+                    if (i >= 0 && i < totalSlots) {
+                        slots.add(container.getSlot(i));
+                    }
+                }
+            } else {
+                for (int i = playerSlotsStart; i < playerSlotsStart + 27; i++) {
+                    if (i >= 0 && i < totalSlots) {
+                        slots.add(container.getSlot(i));
+                    }
+                }
+            }
+        }
+
+        return slots;
+    }
+
+    /**
+     * 重载方法保持向后兼容
+     */
+    private List<Slot> getPlayerInventorySlots(AbstractContainerMenu container) {
+        return getPlayerInventorySlots(container, false);
+    }
+
+    /**
+     * 转移指定槽位列表中的所有物品
+     */
+    private boolean transferAllSlots(List<Slot> slots, AbstractContainerMenu container, Minecraft mc, String direction) {
+        if (slots.isEmpty()) {
+            return false;
+        }
+
+        boolean anyTransferred = false;
+        int transferredSlots = 0;
+        int totalSlots = 0;
+        for (Slot slot : slots) {
+            if (!slot.getItem().isEmpty()) {
+                totalSlots++;
+            }
+        }
+
+        if (totalSlots == 0) {
+            return false;
+        }
+
+        try {
+            for (Slot slot : slots) {
+                if (slot.getItem().isEmpty()) continue;
+                if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
+                    LOGGER.warn("转移过程中鼠标不为空，停止转移");
+                    break;
+                }
+                ItemStack originalItem = slot.getItem().copy();
+                mc.gameMode.handleInventoryMouseClick(
+                        container.containerId,
+                        slot.index,
+                        0,
+                        net.minecraft.world.inventory.ClickType.QUICK_MOVE,
+                        mc.player
+                );
+                ItemStack currentItem = slot.getItem();
+                if (currentItem.getCount() < originalItem.getCount() || currentItem.isEmpty()) {
+                    anyTransferred = true;
+                    transferredSlots++;
+                }
+                if (transferredSlots % 10 == 0) {
+                    try {
+                        Thread.sleep(5);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+            return anyTransferred;
+        } catch (Exception e) {
+            LOGGER.error("转移所有物品时发生错误: ", e);
+            return false;
+        }
+    }
+
+    /**
+     * 获取容器槽位（不包括玩家背包）
+     */
+    private List<Slot> getContainerSlots(AbstractContainerMenu container) {
+        List<Slot> slots = new ArrayList<>();
+        if (container instanceof InventoryMenu) {
+            return slots;
+        }
+        int totalSlots = container.slots.size();
+        int containerSlotsEnd = totalSlots - 36;
+        for (int i = 0; i < containerSlotsEnd; i++) {
+            if (i >= 0 && i < totalSlots) {
+                slots.add(container.getSlot(i));
+            }
+        }
+        return slots;
+    }
+
+    /**
+     * 改进的判断是否为容器槽位的方法
+     */
+    private boolean isContainerSlot(Slot slot, AbstractContainerMenu container) {
+        if (container instanceof InventoryMenu) {
+            return false;
+        }
+        int totalSlots = container.slots.size();
+        int playerSlotsStart = totalSlots - 36;
+        return slot.index < playerSlotsStart;
+    }
+
+    /**
+     * 获取鼠标下的槽位
+     */
+    private Slot getSlotUnderMouse(AbstractContainerScreen<?> screen) {
+        try {
+            java.lang.reflect.Method method = null;
+            Class<?> clazz = AbstractContainerScreen.class;
+            String[] methodNames = {"getSlotUnderMouse", "m_97894_", "getHoveredSlot"};
+            for (String methodName : methodNames) {
+                try {
+                    method = clazz.getDeclaredMethod(methodName);
+                    break;
+                } catch (NoSuchMethodException ignored) {
+
+                }
+            }
+            if (method != null) {
+                method.setAccessible(true);
+                return (Slot) method.invoke(screen);
+            }
+            java.lang.reflect.Field[] fields = clazz.getDeclaredFields();
+            for (java.lang.reflect.Field field : fields) {
+                if (field.getType() == Slot.class) {
+                    field.setAccessible(true);
+                    Object value = field.get(screen);
+                    if (value instanceof Slot) {
+                        return (Slot) value;
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("获取鼠标下槽位失败: ", e);
+            }
+        }
+        return null;
+    }
+
+    @SubscribeEvent
     public void onScreenKeyPress(ScreenEvent.KeyPressed.Pre event) {
         if (sortKey.matches(event.getKeyCode(), event.getScanCode())) {
             Minecraft mc = Minecraft.getInstance();
@@ -122,12 +486,12 @@ public class InventorySortMod {
 
     private void sortContainerAsync() {
         if (isSorting) return;
-
-        CompletableFuture.runAsync(() -> {
+        Minecraft mc = Minecraft.getInstance();
+        mc.execute(() -> {
             try {
                 sortContainer();
             } catch (Exception e) {
-                LOGGER.error("异步排序容器时发生错误: ", e);
+                LOGGER.error("排序容器时发生错误: ", e);
             }
         });
     }
@@ -151,21 +515,12 @@ public class InventorySortMod {
         isSorting = true;
         try {
             AbstractContainerMenu container = player.containerMenu;
-            if (container instanceof InventoryMenu) {
-                sortPlayerInventory();
-                return;
-            }
-
             List<Slot> containerSlots = new ArrayList<>();
-            int containerSize = getContainerSize(container);
-            if (containerSize > MAX_CONTAINER_SIZE) {
-                LOGGER.warn("容器太大 ({} 槽位)，跳过排序以避免性能问题", containerSize);
-                return;
-            }
-            for (int i = 0; i < container.slots.size(); i++) {
-                Slot slot = container.getSlot(i);
-                if (isContainerSlot(slot, container)) {
-                    containerSlots.add(slot);
+            int totalSlots = container.slots.size();
+            int containerSlotsCount = totalSlots - 36;
+            for (int i = 0; i < containerSlotsCount; i++) {
+                if (i < totalSlots) {
+                    containerSlots.add(container.getSlot(i));
                 }
             }
             if (!containerSlots.isEmpty()) {
@@ -174,15 +529,6 @@ public class InventorySortMod {
         } finally {
             isSorting = false;
         }
-    }
-
-    private boolean isContainerSlot(Slot slot, AbstractContainerMenu container) {
-        int totalSlots = container.slots.size();
-        if (container instanceof InventoryMenu) {
-            return false;
-        }
-        int playerSlotsStart = totalSlots - 36;
-        return slot.index < playerSlotsStart;
     }
 
     private boolean isPlayerSlot(Slot slot, AbstractContainerMenu container) {
@@ -235,13 +581,12 @@ public class InventorySortMod {
     private void sortSlots(List<Slot> slots, AbstractContainerMenu container) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.gameMode == null) return;
+
         try {
             if (!ensureMouseEmpty(container, mc)) {
-                LOGGER.warn("手上有物品且无法放置，取消排序操作");
                 return;
             }
             mergeIdenticalItemsBatched(slots, container, mc);
-            logItemCategories(slots);
             performSortBatched(slots, container, mc);
             if (!ensureMouseEmpty(container, mc)) {
                 LOGGER.error("排序完成后无法清空鼠标，可能存在物品丢失");
@@ -259,47 +604,61 @@ public class InventorySortMod {
 
     private boolean ensureMouseEmpty(AbstractContainerMenu container, Minecraft mc) {
         if (mc.gameMode == null || mc.player == null) return true;
+
         ItemStack carriedItem = mc.player.inventoryMenu.getCarried();
         if (carriedItem.isEmpty()) {
             return true;
         }
-        for (Slot slot : container.slots) {
-            if (slot.getItem().isEmpty() && slot.mayPlace(carriedItem)) {
-                mc.gameMode.handleInventoryMouseClick(
-                        container.containerId,
-                        slot.index,
-                        0,
-                        net.minecraft.world.inventory.ClickType.PICKUP,
-                        mc.player
-                );
-                if (mc.player.inventoryMenu.getCarried().isEmpty()) {
-                    return true;
+        int attempts = 0;
+        final int MAX_ATTEMPTS = 3;
+        while (!carriedItem.isEmpty() && attempts < MAX_ATTEMPTS) {
+            attempts++;
+            boolean placed = false;
+            for (Slot slot : container.slots) {
+                if (slot.getItem().isEmpty() && slot.mayPlace(carriedItem)) {
+                    mc.gameMode.handleInventoryMouseClick(
+                            container.containerId,
+                            slot.index,
+                            0,
+                            net.minecraft.world.inventory.ClickType.PICKUP,
+                            mc.player
+                    );
+                    carriedItem = mc.player.inventoryMenu.getCarried();
+                    if (carriedItem.isEmpty()) {
+                        placed = true;
+                        break;
+                    }
                 }
             }
-        }
-        for (Slot slot : container.slots) {
-            ItemStack slotItem = slot.getItem();
-            if (!slotItem.isEmpty() &&
-                    ItemStack.isSameItemSameTags(carriedItem, slotItem) &&
-                    slotItem.getCount() < slotItem.getMaxStackSize() &&
-                    slot.mayPlace(carriedItem)) {
+            if (placed) break;
+            for (Slot slot : container.slots) {
+                ItemStack slotItem = slot.getItem();
+                if (!slotItem.isEmpty() &&
+                        ItemStack.isSameItemSameTags(carriedItem, slotItem) &&
+                        slotItem.getCount() < slotItem.getMaxStackSize() &&
+                        slot.mayPlace(carriedItem)) {
 
-                mc.gameMode.handleInventoryMouseClick(
-                        container.containerId,
-                        slot.index,
-                        0,
-                        net.minecraft.world.inventory.ClickType.PICKUP,
-                        mc.player
-                );
-
-                // 检查是否成功放下
-                if (mc.player.inventoryMenu.getCarried().isEmpty()) {
-                    return true;
+                    mc.gameMode.handleInventoryMouseClick(
+                            container.containerId,
+                            slot.index,
+                            0,
+                            net.minecraft.world.inventory.ClickType.PICKUP,
+                            mc.player
+                    );
+                    carriedItem = mc.player.inventoryMenu.getCarried();
+                    if (carriedItem.isEmpty()) {
+                        break;
+                    }
                 }
             }
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
         }
-        LOGGER.warn("无法放下手上的物品: {}", carriedItem.getDisplayName().getString());
-        return false;
+        return carriedItem.isEmpty();
     }
 
     private void mergeIdenticalItemsBatched(List<Slot> slots, AbstractContainerMenu container, Minecraft mc) {
@@ -309,12 +668,14 @@ public class InventorySortMod {
         do {
             merged = false;
             iterations++;
-
             if (iterations > MAX_MERGE_ITERATIONS) {
                 LOGGER.warn("合并操作达到最大迭代次数，停止合并");
                 break;
             }
-
+            if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
+                LOGGER.warn("检测到鼠标不为空，停止合并操作");
+                break;
+            }
             for (int batchStart = 0; batchStart < slots.size() && !merged; batchStart += BATCH_SIZE) {
                 int batchEnd = Math.min(batchStart + BATCH_SIZE, slots.size());
 
@@ -337,16 +698,20 @@ public class InventorySortMod {
                         if (ItemStack.isSameItemSameTags(stack1, stack2)) {
                             int spaceAvailable = stack1.getMaxStackSize() - stack1.getCount();
                             if (spaceAvailable > 0) {
-                                mergeStacks(slot1, slot2, container, mc);
-                                merged = true;
-                                break;
+                                if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
+                                    return;
+                                }
+                                if (mergeStacks(slot1, slot2, container, mc)) {
+                                    merged = true;
+                                    break;
+                                }
                             }
                         }
                     }
                 }
                 if (merged) {
                     try {
-                        Thread.sleep(1);
+                        Thread.sleep(3);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                         return;
@@ -356,17 +721,26 @@ public class InventorySortMod {
         } while (merged);
     }
 
-    private void mergeStacks(Slot targetSlot, Slot sourceSlot, AbstractContainerMenu container, Minecraft mc) {
+    private boolean mergeStacks(Slot targetSlot, Slot sourceSlot, AbstractContainerMenu container, Minecraft mc) {
+        if (mc.gameMode == null || mc.player == null) return false;
+
         ItemStack target = targetSlot.getItem();
         ItemStack source = sourceSlot.getItem();
-        if (mc.gameMode == null || mc.player == null) return;
-        if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
-            LOGGER.warn("合并物品时鼠标不为空，跳过此次合并");
-            return;
+        if (!ItemStack.isSameItemSameTags(target, source)) {
+            return false;
         }
         int spaceAvailable = target.getMaxStackSize() - target.getCount();
-        int toTransfer = Math.min(spaceAvailable, source.getCount());
-        if (toTransfer > 0) {
+        if (spaceAvailable <= 0) {
+            return false;
+        }
+        boolean targetIsContainer = isContainerSlot(targetSlot, container);
+        boolean sourceIsContainer = isContainerSlot(sourceSlot, container);
+        if (targetIsContainer != sourceIsContainer) {
+            return false;
+        }
+        int originalTargetCount = target.getCount();
+        int originalSourceCount = source.getCount();
+        try {
             mc.gameMode.handleInventoryMouseClick(
                     container.containerId,
                     sourceSlot.index,
@@ -374,36 +748,32 @@ public class InventorySortMod {
                     net.minecraft.world.inventory.ClickType.PICKUP,
                     mc.player
             );
-            ItemStack carried = mc.player.inventoryMenu.getCarried();
-            if (carried.isEmpty()) {
-                LOGGER.warn("拾取源物品失败");
-                return;
-            }
-            for (int i = 0; i < toTransfer; i++) {
-                mc.gameMode.handleInventoryMouseClick(
-                        container.containerId,
-                        targetSlot.index,
-                        1,
-                        net.minecraft.world.inventory.ClickType.PICKUP,
-                        mc.player
-                );
-            }
-            if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
-                mc.gameMode.handleInventoryMouseClick(
-                        container.containerId,
-                        sourceSlot.index,
-                        0,
-                        net.minecraft.world.inventory.ClickType.PICKUP,
-                        mc.player
-                );
-            }
-            if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
-                LOGGER.error("合并操作后鼠标仍不为空，可能存在物品丢失风险");
-            }
+            mc.gameMode.handleInventoryMouseClick(
+                    container.containerId,
+                    targetSlot.index,
+                    0, // 左键
+                    net.minecraft.world.inventory.ClickType.PICKUP,
+                    mc.player
+            );
+            mc.gameMode.handleInventoryMouseClick(
+                    container.containerId,
+                    sourceSlot.index,
+                    0,
+                    net.minecraft.world.inventory.ClickType.PICKUP,
+                    mc.player
+            );
+            return targetSlot.getItem().getCount() > originalTargetCount;
+        } catch (Exception e) {
+            LOGGER.error("合并物品时发生错误: ", e);
+            return false;
         }
     }
 
     private void performSortBatched(List<Slot> slots, AbstractContainerMenu container, Minecraft mc) {
+        if (mc.player == null) return;
+        if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
+            return;
+        }
         List<SlotInfo> slotInfos = new ArrayList<>();
         for (int i = 0; i < slots.size(); i++) {
             Slot slot = slots.get(i);
@@ -419,13 +789,16 @@ public class InventorySortMod {
             String keyB = getItemKey(b.stack);
             return keyA.compareTo(keyB);
         });
+
         int swapCount = 0;
         for (int targetIndex = 0; targetIndex < slotInfos.size(); targetIndex++) {
+            if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
+                break;
+            }
             SlotInfo targetInfo = slotInfos.get(targetIndex);
             if (targetInfo.originalIndex == targetIndex) {
                 continue;
             }
-
             SlotInfo currentAtTarget = null;
             for (int i = targetIndex + 1; i < slotInfos.size(); i++) {
                 if (slotInfos.get(i).originalIndex == targetIndex) {
@@ -433,49 +806,36 @@ public class InventorySortMod {
                     break;
                 }
             }
-
             if (currentAtTarget != null) {
-                swapSlots(slots.get(targetIndex), slots.get(targetInfo.originalIndex), container, mc);
+                if (swapSlots(slots.get(targetIndex), slots.get(targetInfo.originalIndex), container, mc)) {
+                    int tempIndex = targetInfo.originalIndex;
+                    targetInfo.originalIndex = targetIndex;
+                    currentAtTarget.originalIndex = tempIndex;
 
-                int tempIndex = targetInfo.originalIndex;
-                targetInfo.originalIndex = targetIndex;
-                currentAtTarget.originalIndex = tempIndex;
-
-                swapCount++;
-                if (swapCount % 20 == 0) {
-                    try {
-                        Thread.sleep(1);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        return;
+                    swapCount++;
+                    if (swapCount % 20 == 0) {
+                        try {
+                            Thread.sleep(3);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
                     }
                 }
             }
         }
     }
 
-    private void logItemCategories(List<Slot> slots) {
-        Map<ItemCategory, Integer> categoryCount = new HashMap<>();
-        Map<ItemCategory, Set<String>> categoryItems = new HashMap<>();
-        for (Slot slot : slots) {
-            if (!slot.getItem().isEmpty()) {
-                ItemCategory category = getItemCategory(slot.getItem());
-                categoryCount.put(category, categoryCount.getOrDefault(category, 0) + 1);
-                categoryItems.computeIfAbsent(category, k -> new HashSet<>())
-                        .add(getItemName(slot.getItem().getItem()));
-            }
-        }
-    }
-
-    private void swapSlots(Slot slot1, Slot slot2, AbstractContainerMenu container, Minecraft mc) {
+    private boolean swapSlots(Slot slot1, Slot slot2, AbstractContainerMenu container, Minecraft mc) {
         if (slot1.getItem().isEmpty() && slot2.getItem().isEmpty()) {
-            return;
+            return true;
         }
-        if (mc.gameMode == null || mc.player == null) return;
+
+        if (mc.gameMode == null || mc.player == null) return false;
         if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
-            LOGGER.warn("交换物品时鼠标不为空，跳过此次交换");
-            return;
+            return false;
         }
+
         mc.gameMode.handleInventoryMouseClick(
                 container.containerId,
                 slot1.index,
@@ -483,6 +843,7 @@ public class InventorySortMod {
                 net.minecraft.world.inventory.ClickType.PICKUP,
                 mc.player
         );
+
         mc.gameMode.handleInventoryMouseClick(
                 container.containerId,
                 slot2.index,
@@ -490,6 +851,7 @@ public class InventorySortMod {
                 net.minecraft.world.inventory.ClickType.PICKUP,
                 mc.player
         );
+
         mc.gameMode.handleInventoryMouseClick(
                 container.containerId,
                 slot1.index,
@@ -497,9 +859,12 @@ public class InventorySortMod {
                 net.minecraft.world.inventory.ClickType.PICKUP,
                 mc.player
         );
+
         if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
             LOGGER.error("交换操作后鼠标仍不为空，可能存在问题");
+            return false;
         }
+        return true;
     }
 
     private String getItemKey(ItemStack stack) {
@@ -772,8 +1137,7 @@ public class InventorySortMod {
                     ));
                 }
             }
-        } catch (Exception e) {
-            // 忽略标签检查错误
+        } catch (Exception ignored) {
         }
         return false;
     }

@@ -3,7 +3,7 @@ Specification-Title: inventory_sort
 Specification-Vendor: wzz
 Specification-Version: 1
 Implementation-Title: shader_block
-Implementation-Version: 1.0-SNAPSHOT
+Implementation-Version: 1.1-SNAPSHOT
 Implementation-Vendor: wzz
-Implementation-Timestamp: 2025-07-15T14:31:35+0800
+Implementation-Timestamp: 2025-07-15T18:58:43+0800
 
