@@ -1,0 +1,13 @@
+Command Block Locations Report
+Generated: 2025-07-09T14:50:13.181166600
+World: minecraft:overworld
+Total found: 1
+==================================================
+
+#1 Position: -17, -60, -9
+Type: Impulse
+Command: <empty>
+Auto: false
+Conditional: false
+Teleport command: /tp @p -17 -60 -9
+------------------------------

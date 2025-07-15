@@ -1,0 +1,793 @@
+package com.wzz.inventory_sort;
+
+import com.mojang.logging.LogUtils;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
+import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.InventoryMenu;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.piston.PistonBaseBlock;
+import net.minecraftforge.client.event.InputEvent;
+import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
+import net.minecraftforge.client.event.ScreenEvent;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.eventbus.api.IEventBus;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
+import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+import org.lwjgl.glfw.GLFW;
+import org.slf4j.Logger;
+
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import net.minecraft.world.item.*;
+import net.minecraft.tags.ItemTags;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.level.block.*;
+
+@Mod(InventorySortMod.MODID)
+public class InventorySortMod {
+    public static final String MODID = "inventory_sort";
+    private static final Logger LOGGER = LogUtils.getLogger();
+
+    private static final int MAX_CONTAINER_SIZE = 2000;
+
+    private static final int BATCH_SIZE = 100;
+
+    private static final int MAX_MERGE_ITERATIONS = 200;
+
+    public static KeyMapping sortKey;
+
+    private volatile boolean isSorting = false;
+
+    private static final int HOTBAR_START = 0;      // 快捷栏开始槽位
+    private static final int HOTBAR_END = 8;        // 快捷栏结束槽位
+    private static final int INVENTORY_START = 9;   // 主背包开始槽位
+    private static final int INVENTORY_END = 35;    // 主背包结束槽位
+    private static final int ARMOR_START = 36;      // 护甲槽开始
+    private static final int ARMOR_END = 39;        // 护甲槽结束
+    private static final int OFFHAND_SLOT = 40;     // 副手槽
+
+    private enum ItemCategory {
+        WEAPONS(1, "武器"),
+        TOOLS(2, "工具"),
+        ARMOR(3, "护甲"),
+        BLOCKS(4, "方块"),
+        FOOD(5, "食物"),
+        POTIONS(6, "药水"),
+        REDSTONE(7, "红石"),
+        DECORATIONS(8, "装饰"),
+        MATERIALS(9, "材料"),
+        MISC(10, "杂项");
+
+        private final int priority;
+        private final String displayName;
+
+        ItemCategory(int priority, String displayName) {
+            this.priority = priority;
+            this.displayName = displayName;
+        }
+
+        public int getPriority() {
+            return priority;
+        }
+
+        public String getDisplayName() {
+            return displayName;
+        }
+    }
+
+    public InventorySortMod() {
+        IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
+        modEventBus.addListener(this::onClientSetup);
+        modEventBus.addListener(this::onKeyRegister);
+        MinecraftForge.EVENT_BUS.register(this);
+    }
+
+    private void onClientSetup(final FMLClientSetupEvent event) {
+    }
+
+    private void onKeyRegister(final RegisterKeyMappingsEvent event) {
+        sortKey = new KeyMapping(
+                "key.inventorysort.sort",
+                GLFW.GLFW_KEY_R,
+                "key.categories.inventorysort"
+        );
+        event.register(sortKey);
+    }
+
+    @SubscribeEvent
+    public void onScreenKeyPress(ScreenEvent.KeyPressed.Pre event) {
+        if (sortKey.matches(event.getKeyCode(), event.getScanCode())) {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player == null || isSorting || mc.screen instanceof CreativeModeInventoryScreen || mc.screen == null) return;
+            if (mc.screen instanceof AbstractContainerScreen<?> containerScreen) {
+                AbstractContainerMenu container = containerScreen.getMenu();
+                if (mc.screen instanceof InventoryScreen || container instanceof InventoryMenu) {
+                    sortPlayerInventoryAsync();
+                } else {
+                    sortContainerAsync();
+                }
+                event.setCanceled(true);
+            }
+        }
+    }
+
+    private void sortContainerAsync() {
+        if (isSorting) return;
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                sortContainer();
+            } catch (Exception e) {
+                LOGGER.error("异步排序容器时发生错误: ", e);
+            }
+        });
+    }
+
+    private void sortPlayerInventoryAsync() {
+        if (isSorting) return;
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                sortPlayerInventory();
+            } catch (Exception e) {
+                LOGGER.error("异步排序玩家背包时发生错误: ", e);
+            }
+        });
+    }
+
+    private void sortContainer() {
+        Minecraft mc = Minecraft.getInstance();
+        Player player = mc.player;
+        if (player == null || isSorting) return;
+        isSorting = true;
+        try {
+            AbstractContainerMenu container = player.containerMenu;
+            if (container instanceof InventoryMenu) {
+                sortPlayerInventory();
+                return;
+            }
+
+            List<Slot> containerSlots = new ArrayList<>();
+            int containerSize = getContainerSize(container);
+            if (containerSize > MAX_CONTAINER_SIZE) {
+                LOGGER.warn("容器太大 ({} 槽位)，跳过排序以避免性能问题", containerSize);
+                return;
+            }
+            for (int i = 0; i < container.slots.size(); i++) {
+                Slot slot = container.getSlot(i);
+                if (isContainerSlot(slot, container)) {
+                    containerSlots.add(slot);
+                }
+            }
+            if (!containerSlots.isEmpty()) {
+                sortSlots(containerSlots, container);
+            }
+        } finally {
+            isSorting = false;
+        }
+    }
+
+    private boolean isContainerSlot(Slot slot, AbstractContainerMenu container) {
+        int totalSlots = container.slots.size();
+        if (container instanceof InventoryMenu) {
+            return false;
+        }
+        int playerSlotsStart = totalSlots - 36;
+        return slot.index < playerSlotsStart;
+    }
+
+    private boolean isPlayerSlot(Slot slot, AbstractContainerMenu container) {
+        return !isContainerSlot(slot, container);
+    }
+
+    private void sortPlayerInventory() {
+        Minecraft mc = Minecraft.getInstance();
+        Player player = mc.player;
+        if (player == null || isSorting) return;
+        isSorting = true;
+        try {
+            AbstractContainerMenu container = player.containerMenu;
+            List<Slot> inventorySlots = new ArrayList<>();
+            if (container instanceof InventoryMenu) {
+                for (int i = INVENTORY_START; i <= INVENTORY_END; i++) {
+                    Slot slot = container.getSlot(i);
+                    inventorySlots.add(slot);
+                }
+            } else {
+                int totalSlots = container.slots.size();
+                int playerInventoryStart = totalSlots - 36 + INVENTORY_START;
+                int playerInventoryEnd = totalSlots - 9;
+                for (int i = playerInventoryStart; i < playerInventoryEnd; i++) {
+                    if (i >= 0 && i < totalSlots) {
+                        Slot slot = container.getSlot(i);
+                        inventorySlots.add(slot);
+                    }
+                }
+            }
+            if (!inventorySlots.isEmpty()) {
+                sortSlots(inventorySlots, container);
+            }
+        } finally {
+            isSorting = false;
+        }
+    }
+
+    private int getContainerSize(AbstractContainerMenu container) {
+        int totalSlots = container.slots.size();
+        if (container instanceof InventoryMenu) {
+            return 0;
+        }
+        if (totalSlots > 36) {
+            return totalSlots - 36;
+        }
+        return totalSlots;
+    }
+
+    private void sortSlots(List<Slot> slots, AbstractContainerMenu container) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.gameMode == null) return;
+        try {
+            if (!ensureMouseEmpty(container, mc)) {
+                LOGGER.warn("手上有物品且无法放置，取消排序操作");
+                return;
+            }
+            mergeIdenticalItemsBatched(slots, container, mc);
+            logItemCategories(slots);
+            performSortBatched(slots, container, mc);
+            if (!ensureMouseEmpty(container, mc)) {
+                LOGGER.error("排序完成后无法清空鼠标，可能存在物品丢失");
+            }
+
+        } catch (Exception e) {
+            LOGGER.error("整理物品时发生错误: ", e);
+            try {
+                ensureMouseEmpty(container, mc);
+            } catch (Exception ex) {
+                LOGGER.error("错误恢复时也发生异常: ", ex);
+            }
+        }
+    }
+
+    private boolean ensureMouseEmpty(AbstractContainerMenu container, Minecraft mc) {
+        if (mc.gameMode == null || mc.player == null) return true;
+        ItemStack carriedItem = mc.player.inventoryMenu.getCarried();
+        if (carriedItem.isEmpty()) {
+            return true;
+        }
+        for (Slot slot : container.slots) {
+            if (slot.getItem().isEmpty() && slot.mayPlace(carriedItem)) {
+                mc.gameMode.handleInventoryMouseClick(
+                        container.containerId,
+                        slot.index,
+                        0,
+                        net.minecraft.world.inventory.ClickType.PICKUP,
+                        mc.player
+                );
+                if (mc.player.inventoryMenu.getCarried().isEmpty()) {
+                    return true;
+                }
+            }
+        }
+        for (Slot slot : container.slots) {
+            ItemStack slotItem = slot.getItem();
+            if (!slotItem.isEmpty() &&
+                    ItemStack.isSameItemSameTags(carriedItem, slotItem) &&
+                    slotItem.getCount() < slotItem.getMaxStackSize() &&
+                    slot.mayPlace(carriedItem)) {
+
+                mc.gameMode.handleInventoryMouseClick(
+                        container.containerId,
+                        slot.index,
+                        0,
+                        net.minecraft.world.inventory.ClickType.PICKUP,
+                        mc.player
+                );
+
+                // 检查是否成功放下
+                if (mc.player.inventoryMenu.getCarried().isEmpty()) {
+                    return true;
+                }
+            }
+        }
+        LOGGER.warn("无法放下手上的物品: {}", carriedItem.getDisplayName().getString());
+        return false;
+    }
+
+    private void mergeIdenticalItemsBatched(List<Slot> slots, AbstractContainerMenu container, Minecraft mc) {
+        int iterations = 0;
+        boolean merged;
+
+        do {
+            merged = false;
+            iterations++;
+
+            if (iterations > MAX_MERGE_ITERATIONS) {
+                LOGGER.warn("合并操作达到最大迭代次数，停止合并");
+                break;
+            }
+
+            for (int batchStart = 0; batchStart < slots.size() && !merged; batchStart += BATCH_SIZE) {
+                int batchEnd = Math.min(batchStart + BATCH_SIZE, slots.size());
+
+                for (int i = batchStart; i < batchEnd && !merged; i++) {
+                    Slot slot1 = slots.get(i);
+                    ItemStack stack1 = slot1.getItem();
+
+                    if (stack1.isEmpty() || stack1.getCount() >= stack1.getMaxStackSize()) {
+                        continue;
+                    }
+
+                    for (int j = i + 1; j < slots.size(); j++) {
+                        Slot slot2 = slots.get(j);
+                        ItemStack stack2 = slot2.getItem();
+
+                        if (stack2.isEmpty()) {
+                            continue;
+                        }
+
+                        if (ItemStack.isSameItemSameTags(stack1, stack2)) {
+                            int spaceAvailable = stack1.getMaxStackSize() - stack1.getCount();
+                            if (spaceAvailable > 0) {
+                                mergeStacks(slot1, slot2, container, mc);
+                                merged = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (merged) {
+                    try {
+                        Thread.sleep(1);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        } while (merged);
+    }
+
+    private void mergeStacks(Slot targetSlot, Slot sourceSlot, AbstractContainerMenu container, Minecraft mc) {
+        ItemStack target = targetSlot.getItem();
+        ItemStack source = sourceSlot.getItem();
+        if (mc.gameMode == null || mc.player == null) return;
+        if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
+            LOGGER.warn("合并物品时鼠标不为空，跳过此次合并");
+            return;
+        }
+        int spaceAvailable = target.getMaxStackSize() - target.getCount();
+        int toTransfer = Math.min(spaceAvailable, source.getCount());
+        if (toTransfer > 0) {
+            mc.gameMode.handleInventoryMouseClick(
+                    container.containerId,
+                    sourceSlot.index,
+                    0,
+                    net.minecraft.world.inventory.ClickType.PICKUP,
+                    mc.player
+            );
+            ItemStack carried = mc.player.inventoryMenu.getCarried();
+            if (carried.isEmpty()) {
+                LOGGER.warn("拾取源物品失败");
+                return;
+            }
+            for (int i = 0; i < toTransfer; i++) {
+                mc.gameMode.handleInventoryMouseClick(
+                        container.containerId,
+                        targetSlot.index,
+                        1,
+                        net.minecraft.world.inventory.ClickType.PICKUP,
+                        mc.player
+                );
+            }
+            if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
+                mc.gameMode.handleInventoryMouseClick(
+                        container.containerId,
+                        sourceSlot.index,
+                        0,
+                        net.minecraft.world.inventory.ClickType.PICKUP,
+                        mc.player
+                );
+            }
+            if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
+                LOGGER.error("合并操作后鼠标仍不为空，可能存在物品丢失风险");
+            }
+        }
+    }
+
+    private void performSortBatched(List<Slot> slots, AbstractContainerMenu container, Minecraft mc) {
+        List<SlotInfo> slotInfos = new ArrayList<>();
+        for (int i = 0; i < slots.size(); i++) {
+            Slot slot = slots.get(i);
+            ItemStack stack = slot.getItem();
+            slotInfos.add(new SlotInfo(i, slot, stack.copy()));
+        }
+        slotInfos.sort((a, b) -> {
+            if (a.stack.isEmpty() && b.stack.isEmpty()) return 0;
+            if (a.stack.isEmpty()) return 1;
+            if (b.stack.isEmpty()) return -1;
+
+            String keyA = getItemKey(a.stack);
+            String keyB = getItemKey(b.stack);
+            return keyA.compareTo(keyB);
+        });
+        int swapCount = 0;
+        for (int targetIndex = 0; targetIndex < slotInfos.size(); targetIndex++) {
+            SlotInfo targetInfo = slotInfos.get(targetIndex);
+            if (targetInfo.originalIndex == targetIndex) {
+                continue;
+            }
+
+            SlotInfo currentAtTarget = null;
+            for (int i = targetIndex + 1; i < slotInfos.size(); i++) {
+                if (slotInfos.get(i).originalIndex == targetIndex) {
+                    currentAtTarget = slotInfos.get(i);
+                    break;
+                }
+            }
+
+            if (currentAtTarget != null) {
+                swapSlots(slots.get(targetIndex), slots.get(targetInfo.originalIndex), container, mc);
+
+                int tempIndex = targetInfo.originalIndex;
+                targetInfo.originalIndex = targetIndex;
+                currentAtTarget.originalIndex = tempIndex;
+
+                swapCount++;
+                if (swapCount % 20 == 0) {
+                    try {
+                        Thread.sleep(1);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    private void logItemCategories(List<Slot> slots) {
+        Map<ItemCategory, Integer> categoryCount = new HashMap<>();
+        Map<ItemCategory, Set<String>> categoryItems = new HashMap<>();
+        for (Slot slot : slots) {
+            if (!slot.getItem().isEmpty()) {
+                ItemCategory category = getItemCategory(slot.getItem());
+                categoryCount.put(category, categoryCount.getOrDefault(category, 0) + 1);
+                categoryItems.computeIfAbsent(category, k -> new HashSet<>())
+                        .add(getItemName(slot.getItem().getItem()));
+            }
+        }
+    }
+
+    private void swapSlots(Slot slot1, Slot slot2, AbstractContainerMenu container, Minecraft mc) {
+        if (slot1.getItem().isEmpty() && slot2.getItem().isEmpty()) {
+            return;
+        }
+        if (mc.gameMode == null || mc.player == null) return;
+        if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
+            LOGGER.warn("交换物品时鼠标不为空，跳过此次交换");
+            return;
+        }
+        mc.gameMode.handleInventoryMouseClick(
+                container.containerId,
+                slot1.index,
+                0,
+                net.minecraft.world.inventory.ClickType.PICKUP,
+                mc.player
+        );
+        mc.gameMode.handleInventoryMouseClick(
+                container.containerId,
+                slot2.index,
+                0,
+                net.minecraft.world.inventory.ClickType.PICKUP,
+                mc.player
+        );
+        mc.gameMode.handleInventoryMouseClick(
+                container.containerId,
+                slot1.index,
+                0,
+                net.minecraft.world.inventory.ClickType.PICKUP,
+                mc.player
+        );
+        if (!mc.player.inventoryMenu.getCarried().isEmpty()) {
+            LOGGER.error("交换操作后鼠标仍不为空，可能存在问题");
+        }
+    }
+
+    private String getItemKey(ItemStack stack) {
+        if (stack.isEmpty()) {
+            return "zzz_empty";
+        }
+        ItemCategory category = getItemCategory(stack);
+        String itemName = stack.getItem().toString();
+        String nbtHash = stack.getTag() != null ?
+                String.valueOf(stack.getTag().toString().hashCode()) : "0";
+        return String.format("%02d_%s_%s_%s",
+                category.getPriority(),
+                category.name(),
+                itemName,
+                nbtHash);
+    }
+
+    private ItemCategory getItemCategory(ItemStack stack) {
+        if (stack.isEmpty()) {
+            return ItemCategory.MISC;
+        }
+        Item item = stack.getItem();
+        if (isWeapon(item, stack)) {
+            return ItemCategory.WEAPONS;
+        }
+        if (isTool(item, stack)) {
+            return ItemCategory.TOOLS;
+        }
+        if (isArmor(item, stack)) {
+            return ItemCategory.ARMOR;
+        }
+        if (isFood(item, stack)) {
+            return ItemCategory.FOOD;
+        }
+        if (isPotion(item, stack)) {
+            return ItemCategory.POTIONS;
+        }
+        if (isRedstone(item, stack)) {
+            return ItemCategory.REDSTONE;
+        }
+        if (isDecoration(item, stack)) {
+            return ItemCategory.DECORATIONS;
+        }
+        if (isBlock(item, stack)) {
+            return ItemCategory.BLOCKS;
+        }
+        if (isMaterial(item, stack)) {
+            return ItemCategory.MATERIALS;
+        }
+        return ItemCategory.MISC;
+    }
+
+    private boolean isWeapon(Item item, ItemStack stack) {
+        if (item instanceof SwordItem || item instanceof TridentItem ||
+                item instanceof BowItem || item instanceof CrossbowItem) {
+            return true;
+        }
+        if (stack.is(ItemTags.SWORDS) ||
+                isInTag(stack, "weapons") || isInTag(stack, "swords") ||
+                isInTag(stack, "bows") || isInTag(stack, "crossbows")) {
+            return true;
+        }
+        if (getAttackDamage(item) > 2.0f && !isTool(item, stack)) {
+            return true;
+        }
+        String itemName = getItemName(item).toLowerCase();
+        return itemName.contains("sword") || itemName.contains("blade") ||
+                itemName.contains("katana") || itemName.contains("dagger") ||
+                itemName.contains("bow") || itemName.contains("crossbow") ||
+                itemName.contains("gun") || itemName.contains("rifle") ||
+                itemName.contains("pistol") || itemName.contains("weapon");
+    }
+
+    private boolean isTool(Item item, ItemStack stack) {
+        if (item instanceof DiggerItem || item instanceof ShearsItem ||
+                item instanceof FlintAndSteelItem || item instanceof FishingRodItem ||
+                item instanceof CompassItem ||
+                item instanceof SpyglassItem || item instanceof BrushItem) {
+            return true;
+        }
+        if (stack.is(ItemTags.TOOLS) || stack.is(ItemTags.PICKAXES) ||
+                stack.is(ItemTags.AXES) || stack.is(ItemTags.SHOVELS) ||
+                stack.is(ItemTags.HOES) || isInTag(stack, "tools") ||
+                isInTag(stack, "pickaxes") || isInTag(stack, "axes") ||
+                isInTag(stack, "shovels") || isInTag(stack, "hoes")) {
+            return true;
+        }
+        if (stack.isDamageableItem() && item instanceof DiggerItem) {
+            return true;
+        }
+        String itemName = getItemName(item).toLowerCase();
+        return itemName.contains("pickaxe") || itemName.contains("axe") ||
+                itemName.contains("shovel") || itemName.contains("hoe") ||
+                itemName.contains("wrench") || itemName.contains("hammer") ||
+                itemName.contains("drill") || itemName.contains("chainsaw") ||
+                itemName.contains("tool");
+    }
+
+    private boolean isArmor(Item item, ItemStack stack) {
+        if (item instanceof ArmorItem || item instanceof ElytraItem ||
+                item instanceof ShieldItem) {
+            return true;
+        }
+        if (isInTag(stack, "armor") || isInTag(stack, "helmets") ||
+                isInTag(stack, "chestplates") || isInTag(stack, "leggings") ||
+                isInTag(stack, "boots") || isInTag(stack, "shields")) {
+            return true;
+        }
+        if (stack.isDamageableItem() && hasArmorValue(item)) {
+            return true;
+        }
+        String itemName = getItemName(item).toLowerCase();
+        return itemName.contains("helmet") || itemName.contains("chestplate") ||
+                itemName.contains("leggings") || itemName.contains("boots") ||
+                itemName.contains("armor") || itemName.contains("shield") ||
+                itemName.contains("elytra");
+    }
+
+    private boolean isFood(Item item, ItemStack stack) {
+        if (item.getFoodProperties(stack, null) != null) {
+            return true;
+        }
+        if (item instanceof MilkBucketItem || item instanceof HoneyBottleItem ||
+                item instanceof SuspiciousStewItem) {
+            return true;
+        }
+        if (isInTag(stack, "food") || isInTag(stack, "foods")) {
+            return true;
+        }
+        String itemName = getItemName(item).toLowerCase();
+        return itemName.contains("food") || itemName.contains("bread") ||
+                itemName.contains("meat") || itemName.contains("fish") ||
+                itemName.contains("fruit") || itemName.contains("vegetable") ||
+                itemName.contains("cake") || itemName.contains("pie") ||
+                itemName.contains("soup") || itemName.contains("stew");
+    }
+
+    private boolean isPotion(Item item, ItemStack stack) {
+        if (item instanceof PotionItem || item instanceof SplashPotionItem ||
+                item instanceof LingeringPotionItem || item instanceof TippedArrowItem ||
+                item == Items.GLASS_BOTTLE || item == Items.EXPERIENCE_BOTTLE) {
+            return true;
+        }
+        if (isInTag(stack, "potions") || isInTag(stack, "bottles")) {
+            return true;
+        }
+        String itemName = getItemName(item).toLowerCase();
+        return itemName.contains("potion") || itemName.contains("bottle") ||
+                itemName.contains("elixir") || itemName.contains("tonic") ||
+                itemName.contains("brew") || itemName.contains("essence");
+    }
+
+    private boolean isRedstone(Item item, ItemStack stack) {
+        if (isInTag(stack, "redstone") || isInTag(stack, "redstone_dusts")) {
+            return true;
+        }
+        if (item instanceof BlockItem) {
+            Block block = ((BlockItem) item).getBlock();
+            if (block instanceof RedStoneWireBlock || block instanceof RepeaterBlock ||
+                    block instanceof ComparatorBlock || block instanceof PistonBaseBlock ||
+                    block instanceof DispenserBlock || block instanceof DropperBlock ||
+                    block instanceof HopperBlock || block instanceof ObserverBlock ||
+                    block instanceof DaylightDetectorBlock || block instanceof TripWireHookBlock ||
+                    block instanceof LeverBlock || block instanceof ButtonBlock ||
+                    block instanceof PressurePlateBlock || block instanceof PoweredRailBlock ||
+                    block instanceof DetectorRailBlock || block instanceof RailBlock ||
+                    block instanceof RedstoneLampBlock || block instanceof TargetBlock) {
+                return true;
+            }
+        }
+        String itemName = getItemName(item).toLowerCase();
+        return itemName.contains("redstone") || itemName.contains("repeater") ||
+                itemName.contains("comparator") || itemName.contains("piston") ||
+                itemName.contains("dispenser") || itemName.contains("dropper") ||
+                itemName.contains("hopper") || itemName.contains("observer") ||
+                itemName.contains("lever") || itemName.contains("button") ||
+                itemName.contains("circuit") || itemName.contains("wire");
+    }
+
+    private boolean isDecoration(Item item, ItemStack stack) {
+        if (isInTag(stack, "decorations") || isInTag(stack, "flowers") ||
+                isInTag(stack, "banners") || isInTag(stack, "candles")) {
+            return true;
+        }
+        if (item == Items.PAINTING || item == Items.ITEM_FRAME ||
+                item == Items.GLOW_ITEM_FRAME || item == Items.ARMOR_STAND) {
+            return true;
+        }
+        if (item instanceof BlockItem) {
+            Block block = ((BlockItem) item).getBlock();
+            if (block instanceof FlowerBlock || block instanceof BannerBlock ||
+                    block instanceof CandleBlock || block instanceof CarpetBlock ||
+                    block instanceof GlassBlock || block instanceof StainedGlassBlock) {
+                return true;
+            }
+        }
+        String itemName = getItemName(item).toLowerCase();
+        return itemName.contains("decoration") || itemName.contains("flower") ||
+                itemName.contains("banner") || itemName.contains("candle") ||
+                itemName.contains("painting") || itemName.contains("frame") ||
+                itemName.contains("carpet") || itemName.contains("glass");
+    }
+
+    private boolean isBlock(Item item, ItemStack stack) {
+        if (!(item instanceof BlockItem)) {
+            return false;
+        }
+        if (isInTag(stack, "blocks") || isInTag(stack, "stone") ||
+                isInTag(stack, "wood") || isInTag(stack, "planks") ||
+                isInTag(stack, "logs") || isInTag(stack, "ores")) {
+            return true;
+        }
+        return !isRedstone(item, stack) && !isDecoration(item, stack);
+    }
+
+    private boolean isMaterial(Item item, ItemStack stack) {
+        if (isInTag(stack, "ingots") || isInTag(stack, "gems") ||
+                isInTag(stack, "dusts") || isInTag(stack, "nuggets") ||
+                isInTag(stack, "ores") || isInTag(stack, "raw_materials") ||
+                isInTag(stack, "dyes") || isInTag(stack, "seeds")) {
+            return true;
+        }
+        if (!stack.isDamageableItem() && !isFood(item, stack) &&
+                !isPotion(item, stack) && !(item instanceof BlockItem)) {
+            return true;
+        }
+        String itemName = getItemName(item).toLowerCase();
+        return itemName.contains("ingot") || itemName.contains("gem") ||
+                itemName.contains("dust") || itemName.contains("nugget") ||
+                itemName.contains("crystal") || itemName.contains("shard") ||
+                itemName.contains("essence") || itemName.contains("powder") ||
+                itemName.contains("seed") || itemName.contains("dye") ||
+                itemName.contains("material") || itemName.contains("component");
+    }
+
+    private float getAttackDamage(Item item) {
+        if (item instanceof SwordItem) {
+            return ((SwordItem) item).getDamage();
+        } else if (item instanceof AxeItem) {
+            return ((AxeItem) item).getAttackDamage();
+        } else if (item instanceof DiggerItem) {
+            return ((DiggerItem) item).getAttackDamage();
+        }
+        return 0.0f;
+    }
+
+    private boolean hasArmorValue(Item item) {
+        return item instanceof ArmorItem;
+    }
+
+    private String getItemName(Item item) {
+        ResourceLocation registryName = BuiltInRegistries.ITEM.getKey(item);
+        return registryName != null ? registryName.getPath() : item.toString();
+    }
+
+    private boolean isInTag(ItemStack stack, String tagName) {
+        try {
+            String[] namespaces = {"minecraft", "forge", "c", "common"};
+            for (String namespace : namespaces) {
+                ResourceLocation tagLocation = new ResourceLocation(namespace, tagName);
+                if (BuiltInRegistries.ITEM.getTag(
+                        net.minecraft.tags.TagKey.create(
+                                BuiltInRegistries.ITEM.key(),
+                                tagLocation
+                        )
+                ).isPresent()) {
+                    return stack.is(net.minecraft.tags.TagKey.create(
+                            BuiltInRegistries.ITEM.key(),
+                            tagLocation
+                    ));
+                }
+            }
+        } catch (Exception e) {
+            // 忽略标签检查错误
+        }
+        return false;
+    }
+
+
+    private static class SlotInfo {
+        int originalIndex;
+        Slot slot;
+        ItemStack stack;
+
+        SlotInfo(int originalIndex, Slot slot, ItemStack stack) {
+            this.originalIndex = originalIndex;
+            this.slot = slot;
+            this.stack = stack;
+        }
+    }
+}

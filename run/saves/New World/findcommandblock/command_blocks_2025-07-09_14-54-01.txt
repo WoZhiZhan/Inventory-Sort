@@ -1,0 +1,41 @@
+Command Block Locations Report
+Generated: 2025-07-09T14:54:01.176557600
+World: minecraft:overworld
+Total found: 5
+==================================================
+
+#1 Position: -15, -60, -15
+Type: Impulse
+Command: <empty>
+Auto: false
+Conditional: false
+Teleport command: /tp @p -15 -60 -15
+------------------------------
+#2 Position: -14, -60, -12
+Type: Impulse
+Command: <empty>
+Auto: false
+Conditional: false
+Teleport command: /tp @p -14 -60 -12
+------------------------------
+#3 Position: -17, -60, -17
+Type: Impulse
+Command: <empty>
+Auto: false
+Conditional: false
+Teleport command: /tp @p -17 -60 -17
+------------------------------
+#4 Position: -21, -60, -9
+Type: Repeating
+Command: <empty>
+Auto: false
+Conditional: false
+Teleport command: /tp @p -21 -60 -9
+------------------------------
+#5 Position: -17, -60, -9
+Type: Impulse
+Command: kill
+Auto: false
+Conditional: false
+Teleport command: /tp @p -17 -60 -9
+------------------------------

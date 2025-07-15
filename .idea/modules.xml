@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/com.wzz.shader_block.shader_block.main.iml" filepath="$PROJECT_DIR$/.idea/modules/com.wzz.shader_block.shader_block.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/com.wzz.shader_block.shader_block.test.iml" filepath="$PROJECT_DIR$/.idea/modules/com.wzz.shader_block.shader_block.test.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/organization.shader_block.main.iml" filepath="$PROJECT_DIR$/.idea/modules/organization.shader_block.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/organization.shader_block.test.iml" filepath="$PROJECT_DIR$/.idea/modules/organization.shader_block.test.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/shader_block.main.iml" filepath="$PROJECT_DIR$/.idea/modules/shader_block.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/shader_block.test.iml" filepath="$PROJECT_DIR$/.idea/modules/shader_block.test.iml" />
+    </modules>
+  </component>
+</project>
