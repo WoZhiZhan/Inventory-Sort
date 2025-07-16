@@ -351,23 +351,60 @@ public class InventorySortMod {
 
     @SubscribeEvent
     public void onScreenKeyPress(ScreenEvent.KeyPressed.Pre event) {
-        if (sortKey.matches(event.getKeyCode(), event.getScanCode())) {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.player == null || isSorting || mc.screen instanceof CreativeModeInventoryScreen || mc.screen == null) return;
-            if (mc.screen instanceof AbstractContainerScreen<?> containerScreen) {
-                AbstractContainerMenu container = containerScreen.getMenu();
-                if (mc.screen instanceof InventoryScreen || container instanceof InventoryMenu) {
-                    sortPlayerInventoryAsync();
-                } else {
-                    int containerSize = getContainerSize(container);
-                    if (containerSize < 10) {
-                        return;
-                    }
-                    sortContainerAsync();
-                }
-                event.setCanceled(true);
-            }
+        if (!sortKey.matches(event.getKeyCode(), event.getScanCode())) {
+            return;
         }
+        Minecraft mc = Minecraft.getInstance();
+        if (shouldSkipSorting(mc)) {
+            return;
+        }
+        if (trySortSophisticatedBackpack(event, mc)) {
+            return;
+        }
+        if (!(mc.screen instanceof AbstractContainerScreen<?> containerScreen)) {
+            return;
+        }
+        handleContainerSorting(containerScreen, event);
+    }
+
+    private boolean shouldSkipSorting(Minecraft mc) {
+        return mc.player == null
+                || isSorting
+                || mc.screen instanceof CreativeModeInventoryScreen
+                || mc.screen == null;
+    }
+
+    private boolean trySortSophisticatedBackpack(ScreenEvent.KeyPressed.Pre event, Minecraft mc) {
+        if (!SophisticatedBackpacksHandler.hasSophisticatedBackpacksMod()) {
+            return false;
+        }
+
+        boolean sorted = SophisticatedBackpacksHandler.sortBackpack(event.getScreen());
+        if (sorted) {
+            event.setCanceled(true);
+        }
+        return sorted;
+    }
+
+    private void handleContainerSorting(AbstractContainerScreen<?> containerScreen, ScreenEvent.KeyPressed.Pre event) {
+        AbstractContainerMenu container = containerScreen.getMenu();
+
+        if (isPlayerInventory(containerScreen, container)) {
+            sortPlayerInventoryAsync();
+        } else if (shouldSortContainer(container)) {
+            sortContainerAsync();
+        }
+
+        event.setCanceled(true);
+    }
+
+    private boolean isPlayerInventory(AbstractContainerScreen<?> screen, AbstractContainerMenu menu) {
+        return screen instanceof InventoryScreen || menu instanceof InventoryMenu;
+    }
+
+    private boolean shouldSortContainer(AbstractContainerMenu container) {
+        final int MIN_CONTAINER_SIZE = 10;
+        return getContainerSize(container) >= MIN_CONTAINER_SIZE;
     }
 
     private void sortContainerAsync() {
