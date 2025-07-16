@@ -1,5 +1,6 @@
 package com.wzz.inventory_sort;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -12,6 +13,7 @@ import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.piston.PistonBaseBlock;
+import net.minecraftforge.client.event.InputEvent;
 import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.common.MinecraftForge;
@@ -20,6 +22,7 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+import org.jetbrains.annotations.Nullable;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 
@@ -351,9 +354,21 @@ public class InventorySortMod {
 
     @SubscribeEvent
     public void onScreenKeyPress(ScreenEvent.KeyPressed.Pre event) {
-        if (!sortKey.matches(event.getKeyCode(), event.getScanCode())) {
-            return;
+        if (sortKey.matches(event.getKeyCode(), event.getScanCode())) {
+            tryTriggerSort(event);
         }
+    }
+
+    @SubscribeEvent
+    public void onMouseClick(InputEvent.MouseButton event) {
+        if (event.getAction() != GLFW.GLFW_PRESS) return;
+        if (sortKey.getKey().getType() == InputConstants.Type.MOUSE
+                && sortKey.getKey().getValue() == event.getButton()) {
+            tryTriggerSort(null);
+        }
+    }
+
+    private void tryTriggerSort(@Nullable ScreenEvent.KeyPressed.Pre event) {
         Minecraft mc = Minecraft.getInstance();
         if (shouldSkipSorting(mc)) {
             return;
@@ -361,10 +376,9 @@ public class InventorySortMod {
         if (trySortSophisticatedBackpack(event, mc)) {
             return;
         }
-        if (!(mc.screen instanceof AbstractContainerScreen<?> containerScreen)) {
-            return;
+        if (mc.screen instanceof AbstractContainerScreen<?> containerScreen) {
+            handleContainerSorting(containerScreen, event);
         }
-        handleContainerSorting(containerScreen, event);
     }
 
     private boolean shouldSkipSorting(Minecraft mc) {
@@ -378,11 +392,13 @@ public class InventorySortMod {
         if (!SophisticatedBackpacksHandler.hasSophisticatedBackpacksMod()) {
             return false;
         }
-
-        boolean sorted = SophisticatedBackpacksHandler.sortBackpack(event.getScreen());
-        if (sorted) {
-            event.setCanceled(true);
-        }
+        boolean sorted;
+        if (event != null) {
+            sorted = SophisticatedBackpacksHandler.sortBackpack(event.getScreen());
+            if (sorted) {
+                event.setCanceled(true);
+            }
+        } else sorted = SophisticatedBackpacksHandler.sortBackpack(mc.screen);
         return sorted;
     }
 
@@ -394,8 +410,8 @@ public class InventorySortMod {
         } else if (shouldSortContainer(container)) {
             sortContainerAsync();
         }
-
-        event.setCanceled(true);
+        if (event != null)
+            event.setCanceled(true);
     }
 
     private boolean isPlayerInventory(AbstractContainerScreen<?> screen, AbstractContainerMenu menu) {
