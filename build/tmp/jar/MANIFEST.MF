@@ -1,9 +1,0 @@
-Manifest-Version: 1.0
-Specification-Title: inventory_sort
-Specification-Vendor: wzz
-Specification-Version: 1
-Implementation-Title: shader_block
-Implementation-Version: 1.3-SNAPSHOT
-Implementation-Vendor: wzz
-Implementation-Timestamp: 2025-07-16T18:26:26+0800
-
