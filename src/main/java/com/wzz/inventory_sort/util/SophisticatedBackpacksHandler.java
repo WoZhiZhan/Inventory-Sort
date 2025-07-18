@@ -1,4 +1,4 @@
-package com.wzz.inventory_sort;
+package com.wzz.inventory_sort.util;
 
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraftforge.fml.ModList;
