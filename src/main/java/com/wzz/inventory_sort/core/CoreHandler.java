@@ -54,6 +54,7 @@ public class CoreHandler {
                                         LOGGER.error("一键转移时发生错误: ", e);
                                     }
                                 });
+                                event.setCanceled(true);
                             }
                         }
                     }
