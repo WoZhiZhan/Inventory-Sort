@@ -7,7 +7,9 @@ import com.wzz.inventory_sort.util.SophisticatedBackpacksHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.client.gui.screens.recipebook.RecipeUpdateListener;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.FurnaceMenu;
 import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
@@ -40,17 +42,20 @@ public class CoreHandler {
             if (mc.player == null || mc.screen == null) return;
             if (GLFW.glfwGetKey(mc.getWindow().getWindow(), SPACE_KEY) == GLFW.GLFW_PRESS) {
                 if (mc.screen instanceof AbstractContainerScreen<?> containerScreen) {
-                    AbstractContainerMenu container = containerScreen.getMenu();
-                    Slot hoveredSlot = getSlotUnderMouse(containerScreen);
-                    if (hoveredSlot != null && !hoveredSlot.getItem().isEmpty()) {
-                        CompletableFuture.runAsync(() -> {
-                            try {
-                                performQuickTransfer(hoveredSlot, container, mc);
-                            } catch (Exception e) {
-                                LOGGER.error("一键转移时发生错误: ", e);
+                    if (!(containerScreen instanceof RecipeUpdateListener)) {
+                        AbstractContainerMenu container = containerScreen.getMenu();
+                        if (!(container instanceof FurnaceMenu)) {
+                            Slot hoveredSlot = getSlotUnderMouse(containerScreen);
+                            if (hoveredSlot != null && !hoveredSlot.getItem().isEmpty()) {
+                                CompletableFuture.runAsync(() -> {
+                                    try {
+                                        performQuickTransfer(hoveredSlot, container, mc);
+                                    } catch (Exception e) {
+                                        LOGGER.error("一键转移时发生错误: ", e);
+                                    }
+                                });
                             }
-                        });
-                        event.setCanceled(true);
+                        }
                     }
                 }
             }
@@ -186,7 +191,7 @@ public class CoreHandler {
 
     private boolean shouldSkipSorting(Minecraft mc) {
         return mc.player == null
-                || mc.screen == null;
+                || mc.screen == null || mc.screen instanceof RecipeUpdateListener;
     }
 
     private boolean trySortSophisticatedBackpack(ScreenEvent.KeyPressed.Pre event, Minecraft mc) {
@@ -212,9 +217,6 @@ public class CoreHandler {
         } else if (shouldSortContainer(container)) {
             NETWORK.sendToServer(new SortPacket(false, -1, false));
         }
-
-        if (event != null)
-            event.setCanceled(true);
     }
 
     private boolean isPlayerInventory(AbstractContainerScreen<?> screen, AbstractContainerMenu menu) {
