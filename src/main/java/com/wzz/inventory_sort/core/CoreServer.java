@@ -1,8 +1,10 @@
 package com.wzz.inventory_sort.core;
 
 import com.mojang.logging.LogUtils;
+import com.wzz.inventory_sort.InventorySortMod;
 import com.wzz.inventory_sort.category.ItemCategory;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.ItemTags;
@@ -117,6 +119,40 @@ public class CoreServer {
     }
 
     private static void serverPerformSort(List<Slot> slots, AbstractContainerMenu container, ServerPlayer player) {
+        if (player.isCreative()) {
+            InventorySortMod.queueServerWork(3, () -> performCreativeModeSort(slots, container, player));
+            return;
+        }
+
+        List<ItemStack> items = new ArrayList<>();
+        for (Slot slot : slots) {
+            if (!slot.getItem().isEmpty()) {
+                items.add(slot.getItem().copy());
+            }
+        }
+
+        items.sort((a, b) -> {
+            String keyA = getItemKey(a);
+            String keyB = getItemKey(b);
+            int result = keyA.compareTo(keyB);
+            if (result == 0) {
+                return Integer.compare(b.getCount(), a.getCount());
+            }
+            return result;
+        });
+
+        for (int i = 0; i < slots.size(); i++) {
+            if (i < items.size()) {
+                slots.get(i).set(items.get(i));
+            } else {
+                slots.get(i).set(ItemStack.EMPTY);
+            }
+        }
+
+        container.broadcastChanges();
+    }
+
+    private static void performCreativeModeSort(List<Slot> slots, AbstractContainerMenu container, ServerPlayer player) {
         List<ItemStack> items = new ArrayList<>();
         for (Slot slot : slots) {
             if (!slot.getItem().isEmpty()) {
@@ -130,18 +166,17 @@ public class CoreServer {
             if (result == 0) {
                 return Integer.compare(b.getCount(), a.getCount());
             }
-
             return result;
         });
-        for (Slot slot : slots) {
-            slot.set(ItemStack.EMPTY);
-        }
-        int slotIndex = 0;
-        for (ItemStack item : items) {
-            if (slotIndex < slots.size()) {
-                slots.get(slotIndex).set(item);
-                slotIndex++;
-            }
+        for (int i = 0; i < slots.size(); i++) {
+            ItemStack targetItem = (i < items.size()) ? items.get(i) : ItemStack.EMPTY;
+            slots.get(i).set(targetItem);
+            player.connection.send(new ClientboundContainerSetSlotPacket(
+                    container.containerId,
+                    container.incrementStateId(),
+                    slots.get(i).index,
+                    targetItem
+            ));
         }
         container.broadcastChanges();
     }
