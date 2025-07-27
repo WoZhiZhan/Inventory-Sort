@@ -6,6 +6,7 @@ import com.wzz.inventory_sort.network.SortPacket;
 import com.wzz.inventory_sort.util.SophisticatedBackpacksHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.gui.screens.inventory.CraftingScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.gui.screens.recipebook.RecipeUpdateListener;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -192,7 +193,7 @@ public class CoreHandler {
 
     private boolean shouldSkipSorting(Minecraft mc) {
         return mc.player == null
-                || mc.screen == null || mc.screen instanceof RecipeUpdateListener;
+                || mc.screen == null || mc.screen instanceof CraftingScreen;
     }
 
     private boolean trySortSophisticatedBackpack(ScreenEvent.KeyPressed.Pre event, Minecraft mc) {
