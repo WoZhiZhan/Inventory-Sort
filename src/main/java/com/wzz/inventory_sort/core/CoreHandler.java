@@ -193,7 +193,7 @@ public class CoreHandler {
 
     private boolean shouldSkipSorting(Minecraft mc) {
         return mc.player == null
-                || mc.screen == null || mc.screen instanceof CraftingScreen;
+                || mc.screen == null || mc.screen instanceof CraftingScreen || mc.screen.getClass().getName().startsWith("com.refinedmods.refinedstorage.screen.grid");
     }
 
     private boolean trySortSophisticatedBackpack(ScreenEvent.KeyPressed.Pre event, Minecraft mc) {
