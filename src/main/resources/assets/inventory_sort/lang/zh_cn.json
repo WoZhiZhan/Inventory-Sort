@@ -1,4 +1,6 @@
 {
   "key.inventorysort.sort": "整理物品",
-  "key.categories.inventorysort": "物品整理"
+  "key.categories.inventorysort": "物品整理",
+  "key.inventorysort.gui_blacklist": "添加GUI白名单",
+  "key.inventorysort.whitelist": "添加物品白名单"
 }

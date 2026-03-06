@@ -1,4 +1,6 @@
 {
   "key.inventorysort.sort": "Sort Items",
-  "key.categories.inventorysort": "Inventory Sort"
+  "key.categories.inventorysort": "Inventory Sort",
+  "key.inventorysort.gui_blacklist": "Gui Black List",
+  "key.inventorysort.whitelist": "Item White List"
 }

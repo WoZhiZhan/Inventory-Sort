@@ -23,12 +23,20 @@ import org.jetbrains.annotations.Nullable;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.*;
+import com.wzz.inventory_sort.config.SortConfig;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import java.util.concurrent.CompletableFuture;
 
 import org.slf4j.Logger;
 
 import static com.wzz.inventory_sort.InventorySortMod.NETWORK;
 import static com.wzz.inventory_sort.InventorySortMod.sortKey;
+import static com.wzz.inventory_sort.InventorySortMod.whitelistKey;
+import static com.wzz.inventory_sort.InventorySortMod.guiBlacklistKey;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraftforge.registries.ForgeRegistries;
 import static com.wzz.inventory_sort.core.CoreServer.*;
 
 public class CoreHandler {
@@ -166,6 +174,16 @@ public class CoreHandler {
     public void onScreenKeyPress(ScreenEvent.KeyPressed.Pre event) {
         if (sortKey.matches(event.getKeyCode(), event.getScanCode())) {
             tryTriggerSort(event);
+            return;
+        }
+        // 悬停物品上按键 → 切换物品白名单
+        if (whitelistKey.matches(event.getKeyCode(), event.getScanCode())) {
+            toggleHoveredItemWhitelist(event);
+            return;
+        }
+        // 按键 → 切换当前 GUI 黑名单
+        if (guiBlacklistKey.matches(event.getKeyCode(), event.getScanCode())) {
+            toggleCurrentGuiBlacklist(event);
         }
     }
 
@@ -192,8 +210,13 @@ public class CoreHandler {
     }
 
     private boolean shouldSkipSorting(Minecraft mc) {
-        return mc.player == null
-                || mc.screen == null || mc.screen instanceof CraftingScreen || mc.screen.getClass().getName().startsWith("com.refinedmods.refinedstorage.screen.grid");
+        if (mc.player == null || mc.screen == null) return true;
+        if (mc.screen instanceof CraftingScreen) return true;
+        String className = mc.screen.getClass().getName();
+        if (className.startsWith("com.refinedmods.refinedstorage.screen.grid")) return true;
+        // 用户配置的 GUI 黑名单
+        if (SortConfig.isGuiBlacklisted(className)) return true;
+        return false;
     }
 
     private boolean trySortSophisticatedBackpack(ScreenEvent.KeyPressed.Pre event, Minecraft mc) {
@@ -216,9 +239,86 @@ public class CoreHandler {
 
         if (isPlayerInventory) {
             NETWORK.sendToServer(new SortPacket(false, -1, true));
+            playSortSound();
         } else if (shouldSortContainer(container)) {
             NETWORK.sendToServer(new SortPacket(false, -1, false));
+            playSortSound();
         }
+    }
+
+    /** 播放整理音效（UI 按钮点击声），可在 config 中关闭 */
+    @OnlyIn(Dist.CLIENT)
+    private void playSortSound() {
+        if (!SortConfig.isSortSoundEnabled()) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player != null) {
+            mc.player.playSound(
+                SoundEvents.UI_BUTTON_CLICK.get(),
+                0.4f,
+                1.0f
+            );
+        }
+    }
+
+    /**
+     * 把鼠标悬停的物品 ID 加入 / 移出 物品白名单
+     */
+    @OnlyIn(Dist.CLIENT)
+    private void toggleHoveredItemWhitelist(ScreenEvent.KeyPressed.Pre event) {
+        Minecraft mc = Minecraft.getInstance();
+        if (!(mc.screen instanceof AbstractContainerScreen<?> screen)) return;
+
+        Slot hovered = getSlotUnderMouse(screen);
+        if (hovered == null || hovered.getItem().isEmpty()) return;
+
+        ResourceLocation id = ForgeRegistries.ITEMS.getKey(hovered.getItem().getItem());
+        if (id == null) return;
+        String idStr = id.toString();
+
+        List<String> wl = SortConfig.getWhitelist();
+        if (wl.contains(idStr)) {
+            SortConfig.removeFromWhitelist(idStr);
+            showOverlayMessage(mc, "已从白名单移除: " + idStr, false);
+        } else {
+            SortConfig.addToWhitelist(idStr);
+            showOverlayMessage(mc, "已加入白名单: " + idStr, true);
+        }
+        event.setCanceled(true);
+    }
+
+    /**
+     * 把当前打开的界面类名加入 / 移出 GUI 黑名单
+     */
+    @OnlyIn(Dist.CLIENT)
+    private void toggleCurrentGuiBlacklist(ScreenEvent.KeyPressed.Pre event) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.screen == null) return;
+
+        // 优先用简单类名，方便识别；如含匿名类则用全名
+        String simple = mc.screen.getClass().getSimpleName();
+        String key = (simple.isEmpty() || simple.contains("$"))
+                ? mc.screen.getClass().getName()
+                : simple;
+
+        List<String> bl = SortConfig.getGuiBlacklist();
+        if (bl.contains(key)) {
+            SortConfig.removeFromGuiBlacklist(key);
+            showOverlayMessage(mc, "GUI 黑名单已移除: " + key, false);
+        } else {
+            SortConfig.addToGuiBlacklist(key);
+            showOverlayMessage(mc, "GUI 黑名单已添加: " + key, true);
+        }
+        event.setCanceled(true);
+    }
+
+    @OnlyIn(Dist.CLIENT)
+    private void showOverlayMessage(Minecraft mc, String msg, boolean added) {
+        if (mc.player == null) return;
+        String color = added ? "§a" : "§c";
+        mc.player.displayClientMessage(
+                Component.literal(color + "[整理] " + msg),
+                true
+        );
     }
 
     private boolean isPlayerInventory(AbstractContainerScreen<?> screen, AbstractContainerMenu menu) {

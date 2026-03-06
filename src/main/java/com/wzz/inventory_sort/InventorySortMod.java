@@ -2,6 +2,11 @@ package com.wzz.inventory_sort;
 
 import com.mojang.logging.LogUtils;
 import com.wzz.inventory_sort.network.SortPacket;
+import com.wzz.inventory_sort.config.SortConfig;
+import com.wzz.inventory_sort.gui.ConfigScreen;
+import net.minecraftforge.client.ConfigScreenHandler;
+import net.minecraftforge.fml.ModContainer;
+import net.minecraftforge.fml.ModList;
 import com.wzz.inventory_sort.core.CoreHandler;
 import net.minecraft.client.KeyMapping;
 import net.minecraftforge.api.distmarker.Dist;
@@ -34,12 +39,15 @@ public class InventorySortMod {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     public static KeyMapping sortKey;
+    public static KeyMapping whitelistKey;   // 悬停物品 → 切换白名单
+    public static KeyMapping guiBlacklistKey; // 切换当前 GUI 黑名单
     public InventorySortMod() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
         if (FMLEnvironment.dist == Dist.CLIENT) {
             modEventBus.addListener(this::onClientSetup);
             modEventBus.addListener(this::onKeyRegister);
         }
+        SortConfig.register();
         this.registerNetworking();
         MinecraftForge.EVENT_BUS.register(this);
     }
@@ -61,6 +69,15 @@ public class InventorySortMod {
 
     private void onClientSetup(final FMLClientSetupEvent event) {
         MinecraftForge.EVENT_BUS.register(new CoreHandler());
+        ModContainer container = ModList.get().getModContainerById(MODID).orElse(null);
+        if (container != null) {
+            container.registerExtensionPoint(
+                    ConfigScreenHandler.ConfigScreenFactory.class,
+                    () -> new ConfigScreenHandler.ConfigScreenFactory(
+                            (mc, parent) -> new ConfigScreen(parent)
+                    )
+            );
+        }
     }
 
     private void onKeyRegister(final RegisterKeyMappingsEvent event) {
@@ -70,6 +87,20 @@ public class InventorySortMod {
                 "key.categories.inventorysort"
         );
         event.register(sortKey);
+
+        whitelistKey = new KeyMapping(
+                "key.inventorysort.whitelist",
+                GLFW.GLFW_KEY_UNKNOWN,
+                "key.categories.inventorysort"
+        );
+        event.register(whitelistKey);
+
+        guiBlacklistKey = new KeyMapping(
+                "key.inventorysort.gui_blacklist",
+                GLFW.GLFW_KEY_UNKNOWN,
+                "key.categories.inventorysort"
+        );
+        event.register(guiBlacklistKey);
     }
 
     private static final Collection<AbstractMap.SimpleEntry<Runnable, Integer>> workQueue = new ConcurrentLinkedQueue<>();

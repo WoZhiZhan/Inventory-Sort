@@ -2,6 +2,8 @@ package com.wzz.inventory_sort.core;
 
 import com.mojang.logging.LogUtils;
 import com.wzz.inventory_sort.InventorySortMod;
+import com.wzz.inventory_sort.config.SortConfig;
+import net.minecraftforge.registries.ForgeRegistries;
 import com.wzz.inventory_sort.category.ItemCategory;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
@@ -17,6 +19,7 @@ import net.minecraft.world.level.block.piston.PistonBaseBlock;
 import org.slf4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 public class CoreServer {
@@ -80,11 +83,16 @@ public class CoreServer {
                 if (stack1.isEmpty() || stack1.getCount() >= stack1.getMaxStackSize()) {
                     continue;
                 }
+                // 白名单物品跳过 merge，保持原有分散状态
+                if (SortConfig.isWhitelisted(stack1)) {
+                    continue;
+                }
                 for (int j = i + 1; j < slots.size(); j++) {
                     Slot slot2 = slots.get(j);
                     ItemStack stack2 = slot2.getItem();
 
                     if (stack2.isEmpty()) continue;
+                    if (SortConfig.isWhitelisted(stack2)) continue;
 
                     if (ItemStack.isSameItemSameTags(stack1, stack2)) {
                         int spaceAvailable = stack1.getMaxStackSize() - stack1.getCount();
@@ -112,9 +120,14 @@ public class CoreServer {
             return false;
         }
         int transferAmount = Math.min(spaceAvailable, source.getCount());
-        target.grow(transferAmount);
-        source.shrink(transferAmount);
-        container.broadcastChanges();
+        // 使用 slot.set() 而不是直接修改引用，避免中途 broadcastChanges 同步 carried item
+        ItemStack newTarget = target.copy();
+        newTarget.grow(transferAmount);
+        targetSlot.set(newTarget);
+        ItemStack newSource = source.copy();
+        newSource.shrink(transferAmount);
+        sourceSlot.set(newSource.isEmpty() ? ItemStack.EMPTY : newSource);
+        // 不在此处调 broadcastChanges，由 serverSortSlots 统一在最后广播
         return transferAmount > 0;
     }
 
@@ -124,57 +137,135 @@ public class CoreServer {
             return;
         }
 
-        List<ItemStack> items = new ArrayList<>();
-        for (Slot slot : slots) {
-            if (!slot.getItem().isEmpty()) {
-                items.add(slot.getItem().copy());
+        SortConfig.SortMode mode = SortConfig.getSortMode();
+
+        // 白名单物品保持原位，记录哪些槽位需要参与排序
+        List<Integer> freeIndices = new ArrayList<>();   // 参与排序的槽位下标（在 slots 列表中）
+        List<ItemStack> itemsToSort = new ArrayList<>(); // 对应的物品
+        for (int i = 0; i < slots.size(); i++) {
+            ItemStack stack = slots.get(i).getItem();
+            if (!stack.isEmpty() && SortConfig.isWhitelisted(stack)) {
+                // 白名单：保持不动
+                continue;
+            }
+            freeIndices.add(i);
+            if (!stack.isEmpty()) {
+                itemsToSort.add(stack.copy());
             }
         }
 
-        items.sort((a, b) -> {
-            String keyA = getItemKey(a);
-            String keyB = getItemKey(b);
-            int result = keyA.compareTo(keyB);
-            if (result == 0) {
-                return Integer.compare(b.getCount(), a.getCount());
-            }
-            return result;
-        });
+        itemsToSort.sort(buildComparator(mode));
 
-        for (int i = 0; i < slots.size(); i++) {
-            if (i < items.size()) {
-                slots.get(i).set(items.get(i));
-            } else {
-                slots.get(i).set(ItemStack.EMPTY);
-            }
+        // 生成实际写入顺序（逐行 or 逐列）
+        List<Integer> placement = buildPlacement(freeIndices, slots.size(), mode);
+
+        for (int k = 0; k < placement.size(); k++) {
+            int slotListIdx = placement.get(k);
+            slots.get(slotListIdx).set(k < itemsToSort.size() ? itemsToSort.get(k) : ItemStack.EMPTY);
         }
 
         container.broadcastChanges();
     }
 
-    private static void performCreativeModeSort(List<Slot> slots, AbstractContainerMenu container, ServerPlayer player) {
-        List<ItemStack> items = new ArrayList<>();
-        for (Slot slot : slots) {
-            if (!slot.getItem().isEmpty()) {
-                items.add(slot.getItem().copy());
+    /**
+     * 构建填充顺序索引列表（指向 slots 列表的下标）。
+     * 逐行模式：freeIndices 原样返回。
+     * 逐列模式：将 freeIndices 中的槽位按列优先重排。
+     * 背包/容器宽度统一按 9 格，行数 = total / 9（取整）。
+     */
+    private static List<Integer> buildPlacement(List<Integer> freeIndices, int totalSlots, SortConfig.SortMode mode) {
+        if (!SortConfig.isColumnMode(mode) || freeIndices.isEmpty()) {
+            return new ArrayList<>(freeIndices);
+        }
+
+        // 推算网格宽度（大多数容器是 9 宽）
+        int width = 9;
+        int rows = Math.max(1, (int) Math.ceil((double) totalSlots / width));
+
+        // 把 freeIndices 按物理位置映射到 (row, col)，再列优先遍历
+        // freeIndices 里存的是 slots 列表的下标，其物理位置即为该下标在 9xN 网格中的坐标
+        // 列优先遍历：col 0..width-1，每列 row 0..rows-1
+        List<Integer> result = new ArrayList<>();
+        for (int col = 0; col < width; col++) {
+            for (int row = 0; row < rows; row++) {
+                int physicalIdx = row * width + col; // 在 slots 中的下标
+                if (freeIndices.contains(physicalIdx)) {
+                    result.add(physicalIdx);
+                }
             }
         }
-        items.sort((a, b) -> {
-            String keyA = getItemKey(a);
-            String keyB = getItemKey(b);
-            int result = keyA.compareTo(keyB);
-            if (result == 0) {
-                return Integer.compare(b.getCount(), a.getCount());
-            }
-            return result;
-        });
+        // 防止遗漏（比如非标准尺寸容器）
+        for (int idx : freeIndices) {
+            if (!result.contains(idx)) result.add(idx);
+        }
+        return result;
+    }
+
+    /**
+     * 根据排序模式构建比较器（列模式与对应行模式共用同一比较器，区别仅在填充顺序）
+     */
+    private static java.util.Comparator<ItemStack> buildComparator(SortConfig.SortMode mode) {
+        return switch (mode) {
+            case NAME, NAME_COLUMN -> Comparator.comparing((ItemStack a) -> getItemName(a.getItem()));
+
+            case COUNT ->
+                (a, b) -> {
+                    int cmp = Integer.compare(b.getCount(), a.getCount());
+                    return cmp != 0 ? cmp : getItemName(a.getItem()).compareTo(getItemName(b.getItem()));
+                };
+
+            case COUNT_ASC -> Comparator.comparingInt(ItemStack::getCount).thenComparing(a -> getItemName(a.getItem()));
+
+            case CATEGORY_COUNT ->
+                // 分类 → 子分类，同类内数量从多到少
+                (a, b) -> {
+                    String catA = String.format("%02d_%s_%s",
+                            getItemCategory(a).getPriority(),
+                            getItemCategory(a).name(),
+                            getSubCategory(a, getItemCategory(a)));
+                    String catB = String.format("%02d_%s_%s",
+                            getItemCategory(b).getPriority(),
+                            getItemCategory(b).name(),
+                            getSubCategory(b, getItemCategory(b)));
+                    int catCmp = catA.compareTo(catB);
+                    if (catCmp != 0) return catCmp;
+                    return Integer.compare(b.getCount(), a.getCount());
+                };
+
+            default ->
+                // CATEGORY / CATEGORY_COLUMN：分类 → 子分类 → 名称 → 数量
+                (a, b) -> {
+                    String keyA = getItemKey(a);
+                    String keyB = getItemKey(b);
+                    int result = keyA.compareTo(keyB);
+                    if (result == 0) return Integer.compare(b.getCount(), a.getCount());
+                    return result;
+                };
+        };
+    }
+
+    private static void performCreativeModeSort(List<Slot> slots, AbstractContainerMenu container, ServerPlayer player) {
+        SortConfig.SortMode mode = SortConfig.getSortMode();
+
+        List<Integer> freeIndices = new ArrayList<>();
+        List<ItemStack> itemsToSort = new ArrayList<>();
         for (int i = 0; i < slots.size(); i++) {
-            ItemStack targetItem = (i < items.size()) ? items.get(i) : ItemStack.EMPTY;
-            slots.get(i).set(targetItem);
+            ItemStack stack = slots.get(i).getItem();
+            if (!stack.isEmpty() && SortConfig.isWhitelisted(stack)) continue;
+            freeIndices.add(i);
+            if (!stack.isEmpty()) itemsToSort.add(stack.copy());
+        }
+        itemsToSort.sort(buildComparator(mode));
+        List<Integer> placement = buildPlacement(freeIndices, slots.size(), mode);
+
+        for (int k = 0; k < placement.size(); k++) {
+            int idx = placement.get(k);
+            ItemStack targetItem = k < itemsToSort.size() ? itemsToSort.get(k) : ItemStack.EMPTY;
+            slots.get(idx).set(targetItem);
             player.connection.send(new ClientboundContainerSetSlotPacket(
                     container.containerId,
                     container.incrementStateId(),
-                    slots.get(i).index,
+                    slots.get(idx).index,
                     targetItem
             ));
         }
