@@ -204,7 +204,7 @@ public class CoreServer {
     /**
      * 根据排序模式构建比较器（列模式与对应行模式共用同一比较器，区别仅在填充顺序）
      */
-    private static java.util.Comparator<ItemStack> buildComparator(SortConfig.SortMode mode) {
+    public static java.util.Comparator<ItemStack> buildComparator(SortConfig.SortMode mode) {
         return switch (mode) {
             case NAME, NAME_COLUMN -> Comparator.comparing((ItemStack a) -> getItemName(a.getItem()));
 

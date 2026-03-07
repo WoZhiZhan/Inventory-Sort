@@ -1,13 +1,7 @@
 package com.wzz.inventory_sort;
 
-import com.mojang.logging.LogUtils;
 import com.wzz.inventory_sort.network.SortPacket;
 import com.wzz.inventory_sort.config.SortConfig;
-import com.wzz.inventory_sort.gui.ConfigScreen;
-import net.minecraftforge.client.ConfigScreenHandler;
-import net.minecraftforge.fml.ModContainer;
-import net.minecraftforge.fml.ModList;
-import com.wzz.inventory_sort.core.CoreHandler;
 import net.minecraft.client.KeyMapping;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
@@ -23,7 +17,6 @@ import net.minecraftforge.fml.util.thread.SidedThreadGroups;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
 import org.lwjgl.glfw.GLFW;
-import org.slf4j.Logger;
 
 import net.minecraft.resources.ResourceLocation;
 
@@ -36,7 +29,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 @Mod(InventorySortMod.MODID)
 public class InventorySortMod {
     public static final String MODID = "inventory_sort";
-    private static final Logger LOGGER = LogUtils.getLogger();
 
     public static KeyMapping sortKey;
     public static KeyMapping whitelistKey;   // 悬停物品 → 切换白名单
@@ -56,8 +48,8 @@ public class InventorySortMod {
     public static final SimpleChannel NETWORK = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(MODID, "main"),
             () -> PROTOCOL_VERSION,
-            PROTOCOL_VERSION::equals,
-            PROTOCOL_VERSION::equals
+            NetworkRegistry.acceptMissingOr(PROTOCOL_VERSION::equals),
+            NetworkRegistry.acceptMissingOr(PROTOCOL_VERSION::equals)
     );
 
     private void registerNetworking() {
@@ -68,16 +60,7 @@ public class InventorySortMod {
     }
 
     private void onClientSetup(final FMLClientSetupEvent event) {
-        MinecraftForge.EVENT_BUS.register(new CoreHandler());
-        ModContainer container = ModList.get().getModContainerById(MODID).orElse(null);
-        if (container != null) {
-            container.registerExtensionPoint(
-                    ConfigScreenHandler.ConfigScreenFactory.class,
-                    () -> new ConfigScreenHandler.ConfigScreenFactory(
-                            (mc, parent) -> new ConfigScreen(parent)
-                    )
-            );
-        }
+        InventorySortClient.init();
     }
 
     private void onKeyRegister(final RegisterKeyMappingsEvent event) {

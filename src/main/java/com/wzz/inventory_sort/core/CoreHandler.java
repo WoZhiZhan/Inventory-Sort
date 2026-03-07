@@ -9,10 +9,7 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.CraftingScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.gui.screens.recipebook.RecipeUpdateListener;
-import net.minecraft.world.inventory.AbstractContainerMenu;
-import net.minecraft.world.inventory.FurnaceMenu;
-import net.minecraft.world.inventory.InventoryMenu;
-import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.inventory.*;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
@@ -25,7 +22,7 @@ import org.lwjgl.glfw.GLFW;
 import java.util.*;
 import com.wzz.inventory_sort.config.SortConfig;
 import net.minecraft.sounds.SoundEvents;
-import net.minecraft.sounds.SoundSource;
+
 import java.util.concurrent.CompletableFuture;
 
 import org.slf4j.Logger;
@@ -205,7 +202,7 @@ public class CoreHandler {
             return;
         }
         if (mc.screen instanceof AbstractContainerScreen<?> containerScreen) {
-            handleContainerSorting(containerScreen, event);
+            handleContainerSorting(containerScreen);
         }
     }
 
@@ -214,9 +211,7 @@ public class CoreHandler {
         if (mc.screen instanceof CraftingScreen) return true;
         String className = mc.screen.getClass().getName();
         if (className.startsWith("com.refinedmods.refinedstorage.screen.grid")) return true;
-        // 用户配置的 GUI 黑名单
-        if (SortConfig.isGuiBlacklisted(className)) return true;
-        return false;
+        return SortConfig.isGuiBlacklisted(className);
     }
 
     private boolean trySortSophisticatedBackpack(ScreenEvent.KeyPressed.Pre event, Minecraft mc) {
@@ -233,16 +228,62 @@ public class CoreHandler {
         return sorted;
     }
 
-    private void handleContainerSorting(AbstractContainerScreen<?> containerScreen, ScreenEvent.KeyPressed.Pre event) {
+    private void handleContainerSorting(AbstractContainerScreen<?> containerScreen) {
         AbstractContainerMenu container = containerScreen.getMenu();
         boolean isPlayerInventory = isPlayerInventory(containerScreen, container);
+        if (NETWORK.isRemotePresent(Minecraft.getInstance().getConnection().getConnection())) {
+            NETWORK.sendToServer(new SortPacket(false, -1, isPlayerInventory));
+            playSortSound();
+        } else {
+            performClientSideSort(container, isPlayerInventory);
+            playSortSound();
+        }
+    }
 
-        if (isPlayerInventory) {
-            NETWORK.sendToServer(new SortPacket(false, -1, true));
-            playSortSound();
-        } else if (shouldSortContainer(container)) {
-            NETWORK.sendToServer(new SortPacket(false, -1, false));
-            playSortSound();
+    private void performClientSideSort(AbstractContainerMenu container, boolean isPlayerInventory) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.gameMode == null || mc.player == null) return;
+        List<Slot> slots = isPlayerInventory
+                ? CoreServer.getPlayerInventorySlots(container, false)
+                : CoreServer.getContainerSlots(container);
+        int size = slots.size();
+        ItemStack[] local = new ItemStack[size];
+        for (int i = 0; i < size; i++) {
+            local[i] = slots.get(i).getItem().copy();
+        }
+        SortConfig.SortMode mode = SortConfig.getSortMode();
+        List<ItemStack> sorted = slots.stream()
+                .map(s -> s.getItem().copy())
+                .filter(s -> !s.isEmpty())
+                .sorted(CoreServer.buildComparator(mode))
+                .toList();
+        ItemStack[] target = new ItemStack[size];
+        for (int i = 0; i < size; i++) {
+            target[i] = i < sorted.size() ? sorted.get(i) : ItemStack.EMPTY;
+        }
+        // 基于本地数组执行交换，每次交换后同步更新本地数组
+        for (int i = 0; i < size; i++) {
+            if (ItemStack.matches(local[i], target[i])) continue;
+            int srcIdx = -1;
+            for (int j = i + 1; j < size; j++) {
+                if (!local[j].isEmpty() && ItemStack.isSameItemSameTags(local[j], target[i])
+                        && local[j].getCount() == target[i].getCount()) {
+                    srcIdx = j;
+                    break;
+                }
+            }
+            if (srcIdx == -1) continue;
+            mc.gameMode.handleInventoryMouseClick(container.containerId,
+                    slots.get(srcIdx).index, 0, ClickType.PICKUP, mc.player);
+            mc.gameMode.handleInventoryMouseClick(container.containerId,
+                    slots.get(i).index, 0, ClickType.PICKUP, mc.player);
+            if (!local[i].isEmpty()) {
+                mc.gameMode.handleInventoryMouseClick(container.containerId,
+                        slots.get(srcIdx).index, 0, ClickType.PICKUP, mc.player);
+            }
+            ItemStack tmp = local[i];
+            local[i] = local[srcIdx];
+            local[srcIdx] = tmp;
         }
     }
 
